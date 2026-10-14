@@ -1029,6 +1029,20 @@ export class WinSys {
     }
   }
 
+  /** the display mode changed (exclusive fullscreen / ChangeDisplaySettings) */
+  setScreenSize(w: number, h: number) {
+    const host = this.host;
+    host.screenWidth = w; host.screenHeight = h;
+    this.desktop.w = w; this.desktop.h = h;
+    this.cursorX = Math.min(this.cursorX, w - 1); this.cursorY = Math.min(this.cursorY, h - 1);
+    host.screenChanged?.(w, h);
+    for (const h2 of [...this.zorder]) this.send(h2, WM.DISPLAYCHANGE, 32, BigInt(((h & 0xffff) << 16) | (w & 0xffff)));
+  }
+  markGpuOwned(w: Win) {
+    const r = this.rootOf(w);
+    r.gpuOwned = true;
+  }
+
   setCursorPos(x: number, y: number) {
     this.cursorX = x; this.cursorY = y;
     this.clampCursor();

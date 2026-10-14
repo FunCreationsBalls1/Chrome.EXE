@@ -85,7 +85,9 @@ export class FileTreeSource implements VfsSource {
 /** Read-only directory served over HTTP, described by a manifest {name: size}. */
 export class HttpDirSource implements VfsSource {
   private sizes = new Map<string, number>();
-  constructor(private base: string, manifest: Record<string, number>) {
+  private base: string;
+  constructor(base: string, manifest: Record<string, number>) {
+    this.base = base;
     for (const [k, v] of Object.entries(manifest)) this.sizes.set(k.toLowerCase(), v);
   }
   stat(rel: string): VfsStat | null {

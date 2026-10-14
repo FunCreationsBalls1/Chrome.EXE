@@ -44,11 +44,17 @@ export interface Host {
   canvasFor?(hwnd: number): any;
   /** present a GDI-rendered client area (BGRA, w*h*4 bytes) */
   present2D?(hwnd: number, w: number, h: number, bgra: Uint8Array): void;
+  /** how GPU frames are presented: "gpu" renders into the window's WebGPU canvas, "readback" copies pixels (headless browsers) */
+  presentMode?: "gpu" | "readback";
+  /** show raw pixels (bgra or rgba bytes) in the window's canvas */
+  presentPixels?(hwnd: number, w: number, h: number, data: Uint8Array, bgra: boolean): void;
   /** drain pending input events */
   poll?(): HostEvent[];
   setCursor?(visible: boolean, shape?: string): void;
   setPointerLock?(on: boolean): void;
   setFullscreen?(on: boolean): void;
+  /** the emulated display resolution changed */
+  screenChanged?(w: number, h: number): void;
   messageBox?(title: string, text: string, type: number): number;
   readClipboard?(): string | null;
   writeClipboard?(s: string): void;

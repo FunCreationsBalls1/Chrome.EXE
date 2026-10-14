@@ -50,14 +50,12 @@ export function installUser32(p: Process) {
   }
 
   // ---- class registration ----------------------------------------------------------------------
+  // WNDCLASS: style@0 proc@8 ...; WNDCLASSEX has cbSize@0 and style@4, every later field at the same offset
   const regClass = (c: Cpu, wide: boolean, ex: boolean): number => {
     const a = c.arg(0);
-    const o = ex ? 0 : -8; // WNDCLASSW lacks cbSize (4) + hIconSm; offsets differ by 8 up to hIcon
-    const style = mem.r32(a + 4 + (ex ? 0 : -4)), proc = mem.r32(a + 8 + (ex ? 0 : -8));
-    void o;
-    const base = ex ? a : a - 8; // normalise so that +8 = lpfnWndProc, +16 = cbClsExtra ...
-    const clsExtra = mem.ri32(base + 16), wndExtra = mem.ri32(base + 20), hInst = mem.r32(base + 24), hIcon = mem.r32(base + 32), hCursor = mem.r32(base + 40);
-    const hbr = mem.r32(base + 48), menu = mem.r32(base + 56), namePtr = mem.r32(base + 64);
+    const style = mem.r32(a + (ex ? 4 : 0)), proc = mem.r32(a + 8);
+    const clsExtra = mem.ri32(a + 16), wndExtra = mem.ri32(a + 20), hInst = mem.r32(a + 24), hIcon = mem.r32(a + 32), hCursor = mem.r32(a + 40);
+    const hbr = mem.r32(a + 48), menu = mem.r32(a + 56), namePtr = mem.r32(a + 64);
     const hIconSm = ex ? mem.r32(a + 72) : 0;
     const name = namePtr < 0x10000 ? "#" + namePtr : str(namePtr, wide);
     if (ws.findClass(name) && !ws.findClass(name)!.system) { setErr(1410); return 0; }
@@ -78,13 +76,12 @@ export function installUser32(p: Process) {
     const n = classNameArg(c.arg(1), wide);
     const cls = ws.findClass(n);
     if (!cls) { setErr(ERR_CLASS_NF); return 0; }
-    const out = c.arg(2);
-    const base = ex ? out : out - 8;
-    if (ex) { mem.w32(out, 80); }
-    mem.w32(base + 4, cls.style); mem.wptr(base + 8, cls.proc); mem.w32(base + 16, cls.clsExtra); mem.w32(base + 20, cls.wndExtra);
-    mem.wptr(base + 24, cls.hInstance); mem.wptr(base + 32, cls.hIcon); mem.wptr(base + 40, cls.hCursor); mem.wptr(base + 48, cls.hbrBackground);
-    mem.wptr(base + 56, cls.menuName); mem.wptr(base + 64, c.arg(1));
-    if (ex) mem.wptr(out + 72, cls.hIconSm);
+    const a = c.arg(2);
+    if (ex) mem.w32(a, 80);
+    mem.w32(a + (ex ? 4 : 0), cls.style); mem.wptr(a + 8, cls.proc); mem.w32(a + 16, cls.clsExtra); mem.w32(a + 20, cls.wndExtra);
+    mem.wptr(a + 24, cls.hInstance); mem.wptr(a + 32, cls.hIcon); mem.wptr(a + 40, cls.hCursor); mem.wptr(a + 48, cls.hbrBackground);
+    mem.wptr(a + 56, cls.menuName); mem.wptr(a + 64, c.arg(1));
+    if (ex) mem.wptr(a + 72, cls.hIconSm);
     return cls.atom;
   };
   wa("GetClassInfo", (c, w) => getClassInfo(c, w, false));
@@ -930,8 +927,7 @@ export function installUser32(p: Process) {
       const w = mem.r32(dm + 172 + off), h = mem.r32(dm + 176 + off);
       if (w && h && (w !== ws.host.screenWidth || h !== ws.host.screenHeight)) {
         // exclusive fullscreen mode switch: the emulated screen takes the requested size
-        ws.host.screenWidth = w; ws.host.screenHeight = h; ws.desktop.w = w; ws.desktop.h = h;
-        for (const h2 of [...ws.zorder]) ws.send(h2, WM.DISPLAYCHANGE, 32, BigInt((h << 16) | w));
+        ws.setScreenSize(w, h);
       }
     }
     return 0; // DISP_CHANGE_SUCCESSFUL

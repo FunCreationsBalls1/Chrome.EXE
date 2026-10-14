@@ -326,7 +326,7 @@ export async function launch(tree: TreeNode[], exe: string, args = "") {
   emu.worker = worker;
   worker.onmessage = (e) => onWorker(e.data as FromWorker);
   worker.onerror = (e) => { appendLog("err", "worker error: " + e.message); setState("crashed", "worker error: " + e.message); emu.crash = e.message; };
-  const init: InitMsg = { type: "init", canvases, screen: { w: screenW, h: screenH, refresh: 60 }, tree, exe, args, sysdll, opts: { strict: false } };
+  const init: InitMsg = { type: "init", canvases, screen: { w: screenW, h: screenH, refresh: 60 }, tree, exe, args, sysdll, opts: { strict: false, present: new URLSearchParams(location.search).get("present") === "readback" ? "readback" : "gpu", debugShaders: new URLSearchParams(location.search).has("debugshaders") } };
   worker.postMessage(init, canvases);
   stopPads();
   padTimer = requestAnimationFrame(pollPads);

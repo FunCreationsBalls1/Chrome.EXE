@@ -22,7 +22,7 @@ if (existsSync(sysdll)) {
   mkdirSync(join(dist, "sysdll"), { recursive: true });
   for (const f of readdirSync(sysdll)) {
     const p = join(sysdll, f);
-    if (!statSync(p).isFile() || !/\.dll$/i.test(f)) continue;
+    if (!statSync(p).isFile() || !/\.dll$/i.test(f) || /^(wined3d)\.dll$/i.test(f)) continue; // wined3d (23 MB) is only needed by the test-time HLSL compiler
     copyFileSync(p, join(dist, "sysdll", f));
     manifest[f.toLowerCase()] = statSync(p).size;
   }

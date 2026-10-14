@@ -13,6 +13,7 @@ import { installUnwind } from "./unwind.ts";
 import { installKernel32Resources } from "./k32-res.ts";
 import { installUser32 } from "./user32.ts";
 import { installGdi32 } from "./gdi32.ts";
+import { installGraphics } from "../gpu/index.ts";
 
 export type InstallFn = (p: Process) => void;
 const extraInstallers: InstallFn[] = [];
@@ -35,6 +36,7 @@ export function createProcess(opts: ProcessOptions = {}): Process {
   installKernel32Resources(p);
   installUser32(p);
   installGdi32(p);
+  installGraphics(p);
   for (const fn of extraInstallers) fn(p);
   p.registerHleModules();
   return p;

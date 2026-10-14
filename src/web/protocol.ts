@@ -12,7 +12,7 @@ export interface InitMsg {
   args: string;
   sysdll: { base: string; manifest: Record<string, number> } | null;
   /** options */
-  opts: { trace?: boolean; strict?: boolean; maxMemoryPages?: number };
+  opts: { trace?: boolean; strict?: boolean; maxMemoryPages?: number; /** how GPU frames reach the screen: through the WebGPU canvas (default) or by pixel read-back into a 2D canvas (headless test environments) */ present?: "gpu" | "readback"; debugShaders?: boolean };
 }
 export type ToWorker =
   | InitMsg

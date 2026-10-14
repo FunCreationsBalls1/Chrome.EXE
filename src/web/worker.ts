@@ -4,6 +4,7 @@ import { Vfs } from "../win32/vfs.ts";
 import { runAsync } from "../win32/driver.ts";
 import type { GamepadState, Host, HostEvent, WindowInfo } from "../win32/host.ts";
 import { FileTreeSource, HttpDirSource } from "./vfs.ts";
+import { Gpu } from "../gpu/gpu.ts";
 import type { FromWorker, InitMsg, ToWorker } from "./protocol.ts";
 
 const post = (m: FromWorker, transfer?: Transferable[]) => (self as any).postMessage(m, transfer ?? []);
@@ -20,10 +21,13 @@ class BrowserHost implements Host {
   private wake: (() => void) | null = null;
   private measureCtx: OffscreenCanvasRenderingContext2D | null = null;
   clipboardText: string | null = null;
+  presentMode: "gpu" | "readback" = "gpu";
+  gpu: Gpu | null = null;
   private frames = 0;
   private lastStats = performance.now();
 
   constructor(init: InitMsg) {
+    this.presentMode = init.opts.present ?? "gpu";
     this.screenWidth = init.screen.w;
     this.screenHeight = init.screen.h;
     this.refreshRate = init.screen.refresh;
@@ -77,7 +81,8 @@ class BrowserHost implements Host {
     const idx = this.assigned.get(hwnd);
     return idx === undefined ? null : this.pool[idx];
   }
-  present2D(hwnd: number, w: number, h: number, bgra: Uint8Array) {
+  present2D(hwnd: number, w: number, h: number, bgra: Uint8Array) { this.presentPixels(hwnd, w, h, bgra, true); }
+  presentPixels(hwnd: number, w: number, h: number, px: Uint8Array, bgra: boolean) {
     const c = this.canvasFor(hwnd);
     if (!c) return;
     if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
@@ -85,7 +90,8 @@ class BrowserHost implements Host {
     if (!ctx) return;
     const img = ctx.createImageData(w, h);
     const d = img.data;
-    for (let i = 0; i < d.length; i += 4) { d[i] = bgra[i + 2]; d[i + 1] = bgra[i + 1]; d[i + 2] = bgra[i]; d[i + 3] = 255; }
+    if (bgra) for (let i = 0; i < d.length; i += 4) { d[i] = px[i + 2]; d[i + 1] = px[i + 1]; d[i + 2] = px[i]; d[i + 3] = 255; }
+    else for (let i = 0; i < d.length; i += 4) { d[i] = px[i]; d[i + 1] = px[i + 1]; d[i + 2] = px[i + 2]; d[i + 3] = 255; }
     ctx.putImageData(img, 0, 0);
   }
   setCursor(visible: boolean, shape?: string) { post({ type: "cursor", visible, shape }); }
@@ -96,6 +102,7 @@ class BrowserHost implements Host {
   writeClipboard(s: string) { this.clipboardText = s; post({ type: "clipboard", text: s }); }
   gamepad(i: number): GamepadState | null { return this.pads[i] ?? null; }
   frame() {
+    if (this.gpu) for (const e of this.gpu.drainErrors().slice(0, 10)) post({ type: "log", text: "[gpu] " + e });
     this.frames++;
     const now = performance.now();
     if (now - this.lastStats > 1000) {
@@ -152,6 +159,11 @@ async function start(init: InitMsg) {
     strictImports: !!init.opts.strict,
   });
   (self as any).__proc = p;
+  p.ext.debugShaders = !!init.opts.debugShaders;
+  try {
+    const gpu = await Gpu.create();
+    if (gpu) { p.ext.gpu = gpu; host.gpu = gpu; } else post({ type: "log", text: "[gpu] WebGPU is not available; Direct3D applications cannot render" });
+  } catch (e: any) { post({ type: "log", text: "[gpu] initialisation failed: " + e.message }); }
   const data = vfs.readAll(exePath);
   if (!data) { post({ type: "crash", message: `cannot read ${exePath}` }); return; }
   try {

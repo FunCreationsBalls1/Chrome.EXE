@@ -21,7 +21,7 @@ try {
   const deb = readdirSync(tmp).find((f) => f.startsWith("libwine") && f.endsWith(".deb"));
   execFileSync("dpkg", ["-x", join(tmp, deb), join(tmp, "x")], { stdio: "inherit" });
   const dir = join(tmp, "x/usr/lib/x86_64-linux-gnu/wine/x86_64-windows");
-  const want = /^(ucrtbase|msvcrt|msvcr\d+|msvcp\d+|vcruntime\d+(_\d)?|concrt\d+|d3dx(9|10|11)_\d+|d3dcompiler_\d+|d3dxof|xinput.*|d3dx11.*)\.dll$/i;
+  const want = /^(ucrtbase|msvcrt|msvcr\d+|msvcp\d+|vcruntime\d+(_\d)?|concrt\d+|d3dx(9|10|11)_\d+|d3dcompiler_\d+|d3dxof|xinput.*|d3dx11.*|wined3d)\.dll$/i;
   let n = 0;
   for (const f of readdirSync(dir)) {
     if (want.test(f)) { copyFileSync(join(dir, f), join(dest, f)); n++; }
