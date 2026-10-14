@@ -44,3 +44,28 @@ test("Direct3D 11: device + swap chain, DXBC shaders, buffers, textures, blendin
     cleanup();
   }
 });
+
+test("Direct3D 11: render targets, depth/stencil, instancing, mips, dynamic textures, blend factor, deferred contexts, MSAA, compute, copies, readback", { skip }, async () => {
+  buildWeb();
+  const s = await openShell();
+  let cleanup = () => {};
+  try {
+    cleanup = await dropFixture(s, "d3d11_adv.exe", {
+      "adv.vs.cso": join(BIN, "d3d11_adv.vs.cso"), "adv.ps.cso": join(BIN, "d3d11_adv.ps.cso"), "adv.fvs.cso": join(BIN, "d3d11_adv.fvs.cso"), "adv.tps.cso": join(BIN, "d3d11_adv.tps.cso"),
+      "adv.cs.cso": join(BIN, "d3d11_cs.cso"),
+    });
+    await waitEmu(s.page, "e.crash || e.exitCode !== null", 120000);
+    const st = await emuState(s.page);
+    assert.equal(st.crash, null, String(st.crash) + "\n" + st.log.join("\n"));
+    const out = st.out.replace(/\r\n/g, "\n");
+    const fails = out.split("\n").filter((l) => l.startsWith("FAIL"));
+    assert.equal(fails.length, 0, out + "\n" + st.log.join("\n"));
+    assert.match(out, /summary pass=\d+ fail=0/, out + "\n" + st.log.join("\n"));
+    assert.equal(st.code, 0, out + st.log.join("\n"));
+  } finally {
+    const st = await emuState(s.page).catch(() => null);
+    if (st) console.log(st.log.slice(0, 60).join("\n"), s.logs.join("\n"));
+    await s.close();
+    cleanup();
+  }
+});
