@@ -1,0 +1,22 @@
+{
+  "name": "chrome-exe",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Run unmodified Windows x86-64 executables in the browser: client-side x86-64 -> WebAssembly dynamic binary translation, Win32 HLE, Direct3D -> WebGPU.",
+  "scripts": {
+    "build:runtime": "node scripts/build-runtime.mjs",
+    "build:fixtures": "node scripts/build-fixtures.mjs",
+    "build:web": "node scripts/build-web.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test --test-concurrency=1 tests/",
+    "serve": "node scripts/serve.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "@webgpu/types": "^0.1.60",
+    "esbuild": "^0.25.0",
+    "playwright-core": "^1.56.0",
+    "typescript": "^5.9.0"
+  }
+}
