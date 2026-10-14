@@ -291,7 +291,7 @@ export class Device9 extends ComObject {
     const old = b.gpu;
     b.gpu = this.gpu.createBuffer(b.size, b.gpuUsage | GPUBufferUsage.COPY_DST, "d3d9 buffer (orphaned)");
     // the old buffer is still referenced by recorded commands; it is released after the next submit
-    if (old) setTimeout(() => old.destroy(), 1000);
+    if (old) this.gpu.deferDestroy(old);
     // re-upload the current contents so non-locked ranges stay valid
     this.gpu.writeBuffer(b.gpu, 0, this.p.mem.bytes(b.shadow, b.size).slice());
   }
@@ -517,6 +517,7 @@ export class Device9 extends ComObject {
       this.inflight++;
       gpu.readTexture(tex, front.fmt.gpuBytes, 0, 0, pp.w, pp.h).then((px) => { host.presentPixels?.(hw, pp.w, pp.h, px, bgra); }).catch((e) => this.p.log(`[d3d9] readback present failed: ${e}`)).finally(() => { this.inflight--; });
       ch.frames++;
+      if (this.debugShaders && ch.frames % 20 === 1) this.p.log(`[d3d9] frame ${ch.frames} stats ${JSON.stringify(gpu.stats)}`);
       this.p.host.frame?.();
       this.p.yieldRequested = true;
       return S_OK;
@@ -939,7 +940,7 @@ struct O { @builtin(position) p: vec4<f32> };
       pass.setStencilReference(stencil & 0xff);
       pass.setViewport(0, 0, rt.w, rt.h, 0, 1);
       pass.draw(4);
-      setTimeout(() => buf.destroy(), 2000);
+      gpu.deferDestroy(buf);
     }
     rt.gpuDirty = true;
   }

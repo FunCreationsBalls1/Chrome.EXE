@@ -3,7 +3,7 @@
 // @compile vsmain vs_2_0 basic.vs20
 // @compile psmain ps_2_0 basic.ps20
 float4x4 wvp : register(c0);
-float4 tint : register(c8);
+float4 tint : register(c4);
 sampler2D tex0 : register(s0);
 
 struct VSIn { float4 pos : POSITION; float4 col : COLOR0; float2 uv : TEXCOORD0; };

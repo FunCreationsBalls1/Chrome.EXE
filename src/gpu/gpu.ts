@@ -103,6 +103,9 @@ export class Gpu {
   endPass() {
     if (this.pass) { this.pass.end(); this.pass = null; this.passKey = ""; this.passTargets = null; }
   }
+  private doomed: { destroy(): void }[] = [];
+  /** destroy a transient resource once the commands recorded so far have been submitted */
+  deferDestroy(r: { destroy(): void }) { this.doomed.push(r); }
   /** Finish and submit everything recorded so far. */
   flush() {
     this.endPass();
@@ -111,6 +114,8 @@ export class Gpu {
       this.encoder = null;
       this.stats.submits++;
     }
+    for (const r of this.doomed) r.destroy();
+    this.doomed.length = 0;
     this.resetRings();
   }
 
@@ -291,14 +296,14 @@ struct Params { rect: vec4<f32>, src: vec4<f32> };
       entries: [{ binding: 0, resource: src.createView({ dimension: "2d", baseMipLevel: 0, mipLevelCount: 1, baseArrayLayer: 0, arrayLayerCount: 1 }) }, { binding: 1, resource: this.blitSamplerFor(filtered) }, { binding: 2, resource: { buffer: ubuf } }],
     });
     const p = this.pending.get(dst);
-    const pass = this.cmd().beginRenderPass({ colorAttachments: [{ view: dst.createView(), loadOp: p ? "clear" : "load", storeOp: "store", clearValue: p?.color ? { r: p.color[0], g: p.color[1], b: p.color[2], a: p.color[3] } : undefined }] });
-    if (p) this.pending.delete(dst);
+    const pass = this.cmd().beginRenderPass({ colorAttachments: [{ view: dst.createView(), loadOp: p?.color ? "clear" : "load", storeOp: "store", clearValue: p?.color ? { r: p.color[0], g: p.color[1], b: p.color[2], a: p.color[3] } : undefined }] });
+    if (p) { this.pending.set(dst, { ...p, color: undefined }); }
     pass.setPipeline(pipeline);
     pass.setBindGroup(0, bg);
     pass.setViewport(0, 0, dw, dh, 0, 1);
     pass.draw(4);
     pass.end();
-    ubuf.destroy();
+    this.deferDestroy(ubuf);
   }
 
   /** Read back a texture's mip-0 contents as tightly packed rows (async; the caller must drive completion). */

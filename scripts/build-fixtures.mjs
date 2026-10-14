@@ -15,6 +15,7 @@ const specs = {
   hello_crt: { flags: ["-O2"] },
   cpp_exceptions: { flags: ["-O2", "-static"] },
   seh_try: { clang: true },
+  d3d9_scene: { flags: ["-O2", "-mconsole", "-static-libgcc", "-static-libstdc++", "-std=gnu++17"], libs: ["-luser32", "-ld3d9", "-lkernel32"] },
   d3d9_basic: { flags: ["-O2", "-mconsole", "-static-libgcc", "-static-libstdc++"], libs: ["-luser32", "-ld3d9", "-lkernel32"] },
   win_basic: { flags: ["-O2", "-mconsole"], libs: ["-luser32", "-lgdi32", "-lkernel32"] },
 };
