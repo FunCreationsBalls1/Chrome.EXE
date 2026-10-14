@@ -89,7 +89,7 @@ export class Machine implements TranslatorHost {
   private initRuntime() {
     // runtime C helpers
     const rtMod = new WebAssembly.Module(b64decode(RUNTIME_WASM_B64) as BufferSource);
-    const rtInst = new WebAssembly.Instance(rtMod, { env: { memory: this.memory } });
+    const rtInst = new WebAssembly.Instance(rtMod, { env: { memory: this.memory, sin: Math.sin, cos: Math.cos, tan: Math.tan, atan2: Math.atan2, log2: Math.log2, pow: Math.pow, fmod: (a: number, b: number) => a % b } });
     this.rt = rtInst.exports as any;
 
     // bootstrap: miss stub + enter
@@ -137,7 +137,7 @@ export class Machine implements TranslatorHost {
     const rt = this.rt as any;
     return {
       cc_eval: rt.cc_eval, cc_getflags: rt.cc_getflags, lookup: rt.lookup, mulhi_u64: rt.mulhi_u64, mulhi_s64: rt.mulhi_s64,
-      div128: rt.div128, rep_movs: rt.rep_movs, rep_stos: rt.rep_stos, rep_cmps: rt.rep_cmps, rep_scas: rt.rep_scas, rot_carry: rt.rot_carry,
+      div128: rt.div128, rep_movs: rt.rep_movs, rep_stos: rt.rep_stos, rep_cmps: rt.rep_cmps, rep_scas: rt.rep_scas, rot_carry: rt.rot_carry, x87: rt.x87, fxsave: rt.fxsave, fxrstor: rt.fxrstor,
     };
   }
 

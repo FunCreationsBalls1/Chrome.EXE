@@ -25,12 +25,43 @@ const args = [
   "-msimd128", "-mbulk-memory", "-mnontrapping-fptoint", "-mtail-call", "-msign-ext", "-mmutable-globals",
   "-Wall", "-Wno-unused-function",
   "-Wl,--no-entry", "-Wl,--export-dynamic", "-Wl,--import-memory", "-Wl,--stack-first",
-  "-Wl,-z,stack-size=3072", "-Wl,--global-base=65536", "-Wl,--initial-memory=1048576",
+  "-Wl,-z,stack-size=3072", "-Wl,--global-base=8192", "-Wl,--initial-memory=1048576",
   "-Wl,--allow-undefined", "-Wl,--strip-all",
   "-o", out, join(root, "runtime/runtime.c"),
 ];
 execFileSync("clang", args, { stdio: "inherit" });
 const wasm = readFileSync(out);
+// The runtime's static data must stay inside the host-reserved window [0x2000, LOOKUP) and not overlap other host structures.
+{
+  const m = new WebAssembly.Module(wasm);
+  void m;
+  // parse the data section (id 11) to find the highest address used
+  let p = 8, maxEnd = 0;
+  while (p < wasm.length) {
+    const id = wasm[p++];
+    let size = 0, shift = 0, b;
+    do { b = wasm[p++]; size |= (b & 0x7f) << shift; shift += 7; } while (b & 0x80);
+    if (id === 11) {
+      let q = p;
+      const rd = () => { let v = 0, sh = 0, bb; do { bb = wasm[q++]; v |= (bb & 0x7f) << sh; sh += 7; } while (bb & 0x80); return v; };
+      const n = rd();
+      for (let i = 0; i < n; i++) {
+        const flag = rd();
+        if (flag !== 0) throw new Error("unexpected data segment flag " + flag);
+        if (wasm[q++] !== 0x41) throw new Error("expected i32.const offset");
+        let off = 0, sh = 0, bb;
+        do { bb = wasm[q++]; off |= (bb & 0x7f) << sh; sh += 7; } while (bb & 0x80);
+        if (wasm[q++] !== 0x0b) throw new Error("expected end");
+        const len = rd();
+        maxEnd = Math.max(maxEnd, off + len);
+        q += len;
+      }
+    }
+    p += size;
+  }
+  console.log("runtime data ends at 0x" + maxEnd.toString(16));
+  if (maxEnd > L.LOOKUP) throw new Error("runtime static data overlaps the lookup cache");
+}
 const b64 = wasm.toString("base64");
 writeFileSync(
   join(root, "src/gen/runtime-wasm.ts"),

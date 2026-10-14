@@ -226,8 +226,41 @@ export interface Compare {
   gprMask?: bigint[]; // optional per-register mask
   skipGpr?: number[];
   skipXmm?: boolean;
+  /** how XMM registers are compared: exact bits (default), NaN-insensitive float lanes, or approximate (rcp/rsqrt) */
+  xmm?: "exact" | "f32" | "f64" | "approx32";
   skipMem?: boolean;
 }
+function xmmEqual(a: Uint8Array, b: Uint8Array, mode: string): boolean {
+  if (mode === "exact") return hex(a) === hex(b);
+  const da = new DataView(a.buffer, a.byteOffset, 16), db = new DataView(b.buffer, b.byteOffset, 16);
+  if (mode === "f64") {
+    for (let i = 0; i < 16; i += 8) {
+      const x = da.getFloat64(i, true), y = db.getFloat64(i, true);
+      if (Number.isNaN(x) && Number.isNaN(y)) continue;
+      if (da.getBigUint64(i, true) !== db.getBigUint64(i, true)) return false;
+    }
+    return true;
+  }
+  for (let i = 0; i < 16; i += 4) {
+    const x = da.getFloat32(i, true), y = db.getFloat32(i, true);
+    if (Number.isNaN(x) && Number.isNaN(y)) continue;
+    if (mode === "approx32") {
+      if (x === y) continue;
+      if (!Number.isFinite(x) || !Number.isFinite(y) || x === 0 || y === 0) {
+        // allow tiny/huge disagreement at the edges: both must be same class
+        if (Object.is(x, y)) continue;
+        if ((x === 0 || Math.abs(x) < 1e-30) && (y === 0 || Math.abs(y) < 1e-30)) continue;
+        if (Math.abs(x) > 1e30 && Math.abs(y) > 1e30 && Math.sign(x) === Math.sign(y)) continue;
+        return false;
+      }
+      if (Math.abs(x - y) <= Math.abs(y) * 3e-4) continue;
+      return false;
+    }
+    if (da.getUint32(i, true) !== db.getUint32(i, true)) return false;
+  }
+  return true;
+}
+
 export function compare(c: Case, nat: Result, jit: Result, opt: Compare = {}): string[] {
   const diffs: string[] = [];
   const names = ["rax", "rcx", "rdx", "rbx", "rsp", "rbp", "rsi", "rdi", "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"];
@@ -242,7 +275,7 @@ export function compare(c: Case, nat: Result, jit: Result, opt: Compare = {}): s
   }
   if (!opt.skipXmm) {
     for (let i = 0; i < 16; i++) {
-      if (hex(nat.xmm[i]) !== hex(jit.xmm[i])) diffs.push(`xmm${i}: native=${hex(nat.xmm[i])} jit=${hex(jit.xmm[i])}`);
+      if (!xmmEqual(nat.xmm[i], jit.xmm[i], opt.xmm ?? "exact")) diffs.push(`xmm${i}: native=${hex(nat.xmm[i])} jit=${hex(jit.xmm[i])}`);
     }
   }
   if (!opt.skipMem) {

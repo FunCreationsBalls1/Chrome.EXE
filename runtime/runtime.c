@@ -321,3 +321,499 @@ EXPORT u64 rot_carry(u32 right, u32 szl, u64 val, u32 count, u32 cf) {
   ST32(S_SCRATCH) = cf;
   return val;
 }
+
+// =============================================================================================
+// x87 FPU (double precision internally) and FXSAVE/FXRSTOR
+// =============================================================================================
+typedef double f64;
+#define IMPORT(name) __attribute__((import_module("env"), import_name(name)))
+IMPORT("sin") f64 js_sin(f64);
+IMPORT("cos") f64 js_cos(f64);
+IMPORT("tan") f64 js_tan(f64);
+IMPORT("atan2") f64 js_atan2(f64, f64);
+IMPORT("log2") f64 js_log2(f64);
+IMPORT("pow") f64 js_pow(f64, f64);
+IMPORT("fmod") f64 js_fmod(f64, f64);
+
+#define ST16(off) (*(volatile u16 *)(STATE_BASE + (off)))
+#define FCW ST16(S_FCW)
+#define FSW ST16(S_FSW)
+#define FTAG ST16(S_FTAG)
+#define FTOP (ST32(S_FTOP) & 7)
+
+#define SW_IE 0x0001
+#define SW_ZE 0x0004
+#define SW_SF 0x0040
+#define SW_C0 0x0100
+#define SW_C1 0x0200
+#define SW_C2 0x0400
+#define SW_C3 0x4000
+#define SW_CC (SW_C0 | SW_C1 | SW_C2 | SW_C3)
+
+static inline volatile f64 *phys(u32 p) { return (volatile f64 *)(STATE_BASE + S_ST + (p & 7) * 16); }
+static inline volatile f64 *stx(u32 i) { return phys(FTOP + i); }
+static inline int tag_empty(u32 p) { return ((FTAG >> ((p & 7) * 2)) & 3) == 3; }
+static inline void set_tag(u32 p, int empty) {
+  u32 sh = (p & 7) * 2;
+  FTAG = (u16)((FTAG & ~(3u << sh)) | ((empty ? 3u : 0u) << sh));
+}
+static inline int st_empty(u32 i) { return tag_empty(FTOP + i); }
+
+static f64 qnan(void) {
+  union { u64 u; f64 d; } v = {0xfff8000000000000ull};
+  return v.d;
+}
+static f64 st_get(u32 i) {
+  if (st_empty(i)) {
+    FSW = (u16)((FSW | SW_IE | SW_SF) & ~SW_C1);
+    return qnan();
+  }
+  return *stx(i);
+}
+static void st_set(u32 i, f64 v) {
+  *stx(i) = v;
+  set_tag(FTOP + i, 0);
+}
+static void push(f64 v) {
+  u32 t = (FTOP - 1) & 7;
+  if (!tag_empty(t)) {
+    FSW = (u16)(FSW | SW_IE | SW_SF | SW_C1);
+    v = qnan();
+  } else FSW = (u16)(FSW & ~SW_C1);
+  ST32(S_FTOP) = t;
+  *phys(t) = v;
+  set_tag(t, 0);
+}
+static f64 pop(void) {
+  f64 v = st_get(0);
+  set_tag(FTOP, 1);
+  ST32(S_FTOP) = (FTOP + 1) & 7;
+  return v;
+}
+
+static f64 round_rc_raw(f64 x, u32 rc);
+static f64 round_rc(f64 x, u32 rc) {
+  f64 r = round_rc_raw(x, rc);
+  if (r == 0) {
+    union { f64 d; u64 u; } sx = {x}, sr = {r};
+    sr.u = (sr.u & ~(1ull << 63)) | (sx.u & (1ull << 63));
+    return sr.d;
+  }
+  return r;
+}
+static f64 round_rc_raw(f64 x, u32 rc) {
+  if (x != x || x == (f64)1e300 * 10 || x == -(f64)1e300 * 10) return x;
+  if (x >= 4503599627370496.0 || x <= -4503599627370496.0) return x;
+  f64 big = 4503599627370496.0;
+  switch (rc) {
+    case 0: { // nearest even
+      f64 r = x >= 0 ? (x + big) - big : (x - big) + big;
+      return r;
+    }
+    case 1: { // floor
+      f64 r = x >= 0 ? (x + big) - big : (x - big) + big;
+      if (r > x) r -= 1.0;
+      return r;
+    }
+    case 2: { // ceil
+      f64 r = x >= 0 ? (x + big) - big : (x - big) + big;
+      if (r < x) r += 1.0;
+      return r;
+    }
+    default: {
+      f64 r = x >= 0 ? (x + big) - big : (x - big) + big;
+      if (x >= 0 ? r > x : r < x) r += x >= 0 ? -1.0 : 1.0;
+      return r;
+    }
+  }
+}
+static inline u32 rc_mode(void) { return (FCW >> 10) & 3; }
+
+static u64 f2i64(f64 x, u32 rc, int bits, int *bad) {
+  f64 r = round_rc(x, rc);
+  f64 lim = bits == 16 ? 32768.0 : bits == 32 ? 2147483648.0 : 9223372036854775808.0;
+  if (r != r || r >= lim || r < -lim) {
+    *bad = 1;
+    return bits == 16 ? 0x8000 : bits == 32 ? 0x80000000ull : 0x8000000000000000ull;
+  }
+  *bad = 0;
+  return (u64)(s64)r;
+}
+
+// ---- 80-bit extended <-> double ----
+static void store80(u32 ea, f64 v) {
+  union { f64 d; u64 u; } x = {v};
+  u32 sign = (u32)(x.u >> 63);
+  u32 e = (u32)((x.u >> 52) & 0x7ff);
+  u64 m = x.u & 0xfffffffffffffull;
+  u64 mant;
+  u32 exp;
+  if (e == 0 && m == 0) { mant = 0; exp = 0; }
+  else if (e == 0x7ff) { exp = 0x7fff; mant = 0x8000000000000000ull | (m << 11); }
+  else if (e == 0) {
+    // denormal double -> normalised extended
+    int sh = __builtin_clzll(m);
+    mant = m << sh;
+    exp = (u32)(1 - 1023 + 16383 - (sh - 11));
+  } else { exp = e - 1023 + 16383; mant = 0x8000000000000000ull | (m << 11); }
+  *(volatile u64 *)ea = mant;
+  *(volatile u16 *)(ea + 8) = (u16)(exp | (sign << 15));
+}
+static f64 load80(u32 ea) {
+  u64 mant = *(volatile u64 *)ea;
+  u16 se = *(volatile u16 *)(ea + 8);
+  u32 sign = se >> 15, exp = se & 0x7fff;
+  union { f64 d; u64 u; } x;
+  if (exp == 0 && mant == 0) x.u = (u64)sign << 63;
+  else if (exp == 0x7fff) x.u = ((u64)sign << 63) | 0x7ff0000000000000ull | ((mant << 1) >> 12) | ((mant << 1) ? 0 : 0);
+  else {
+    int e = (int)exp - 16383 + 1023;
+    if (e >= 0x7ff) x.u = ((u64)sign << 63) | 0x7ff0000000000000ull;
+    else if (e <= 0) {
+      int sh = 1 - e;
+      if (sh > 63) x.u = (u64)sign << 63;
+      else x.u = ((u64)sign << 63) | (mant >> (11 + sh));
+    } else x.u = ((u64)sign << 63) | ((u64)e << 52) | ((mant >> 11) & 0xfffffffffffffull);
+  }
+  return x.d;
+}
+
+static u32 sw_value(void) { return (FSW & ~0x3800u) | (FTOP << 11); }
+
+static void fcom_flags(f64 a, f64 b) {
+  u32 sw = FSW & ~SW_CC;
+  if (a != a || b != b) sw |= SW_C0 | SW_C2 | SW_C3;
+  else if (a > b) {}
+  else if (a < b) sw |= SW_C0;
+  else sw |= SW_C3;
+  FSW = (u16)sw;
+}
+static u32 fcomi_flags(f64 a, f64 b) {
+  if (a != a || b != b) return 0x45;
+  if (a > b) return 0;
+  if (a < b) return 1;
+  return 0x40;
+}
+
+static f64 arith(u32 op, f64 a, f64 b) {
+  switch (op) {
+    case 0: return a + b;
+    case 1: return a * b;
+    case 4: return a - b;
+    case 5: return b - a;
+    case 6:
+      if (b == 0) FSW = (u16)(FSW | SW_ZE);
+      return a / b;
+    default:
+      if (a == 0) FSW = (u16)(FSW | SW_ZE);
+      return b / a;
+  }
+}
+
+static void fnstenv(u32 ea) {
+  *(volatile u16 *)(ea + 0) = FCW;
+  *(volatile u16 *)(ea + 4) = (u16)sw_value();
+  u32 tw = 0;
+  for (u32 i = 0; i < 8; i++) tw |= (tag_empty(i) ? 3u : 0u) << (i * 2);
+  *(volatile u16 *)(ea + 8) = (u16)tw;
+}
+static void fldenv(u32 ea) {
+  FCW = *(volatile u16 *)(ea + 0);
+  u16 sw = *(volatile u16 *)(ea + 4);
+  FSW = sw & ~0x3800u;
+  ST32(S_FTOP) = (sw >> 11) & 7;
+  FTAG = *(volatile u16 *)(ea + 8);
+}
+
+// Returns a value whose meaning depends on the instruction (FNSTSW AX -> AX, FCOMI -> eflags bits). `ea` is the memory
+// address, or for FCMOVcc the evaluated condition (0/1).
+EXPORT u32 x87(u32 esc, u32 modrm, u32 ea) {
+  u32 reg = (modrm >> 3) & 7, rm = modrm & 7;
+  int mem = (modrm >> 6) != 3;
+  int bad;
+  switch (esc) {
+    case 0: case 4: case 2: case 6: { // D8, DC, DA, DE
+      if (mem) {
+        f64 b;
+        if (esc == 0) b = *(volatile float *)ea;
+        else if (esc == 4) b = *(volatile f64 *)ea;
+        else if (esc == 2) b = (f64) * (volatile int *)ea;
+        else b = (f64) * (volatile short *)ea;
+        f64 a = st_get(0);
+        if (reg == 2 || reg == 3) {
+          fcom_flags(a, b);
+          if (reg == 3) pop();
+        } else st_set(0, arith(reg, a, b));
+        return 0;
+      }
+      if (esc == 0) { // D8: st0 = st0 op sti
+        f64 a = st_get(0), b = st_get(rm);
+        if (reg == 2 || reg == 3) {
+          fcom_flags(a, b);
+          if (reg == 3) pop();
+        } else st_set(0, arith(reg, a, b));
+        return 0;
+      }
+      if (esc == 4) { // DC: sti = sti op st0 (sub/div reversed)
+        f64 a = st_get(rm), b = st_get(0);
+        u32 op = reg;
+        if (op == 4) op = 5; else if (op == 5) op = 4; else if (op == 6) op = 7; else if (op == 7) op = 6;
+        if (reg == 2 || reg == 3) return 0; // DC D0/D8 are aliases of FCOM; treated as nop
+        st_set(rm, arith(op, a, b));
+        return 0;
+      }
+      if (esc == 2) { // DA: FCMOVcc / FUCOMPP
+        if (reg < 4) {
+          if (ea) st_set(0, st_get(rm));
+          return 0;
+        }
+        if (modrm == 0xe9) {
+          fcom_flags(st_get(0), st_get(1));
+          pop();
+          pop();
+        }
+        return 0;
+      }
+      // DE: arithmetic with pop, or FCOMPP
+      if (modrm == 0xd9) {
+        fcom_flags(st_get(0), st_get(1));
+        pop();
+        pop();
+        return 0;
+      }
+      {
+        f64 a = st_get(rm), b = st_get(0);
+        u32 op = reg;
+        if (op == 4) op = 5; else if (op == 5) op = 4; else if (op == 6) op = 7; else if (op == 7) op = 6;
+        st_set(rm, arith(op, a, b));
+        pop();
+      }
+      return 0;
+    }
+    case 1: { // D9
+      if (mem) {
+        switch (reg) {
+          case 0: push(*(volatile float *)ea); return 0;
+          case 2: *(volatile float *)ea = (float)st_get(0); return 0;
+          case 3: *(volatile float *)ea = (float)st_get(0); pop(); return 0;
+          case 4: fldenv(ea); return 0;
+          case 5: FCW = *(volatile u16 *)ea; return 0;
+          case 6: fnstenv(ea); return 0;
+          case 7: *(volatile u16 *)ea = FCW; return 0;
+        }
+        return 0;
+      }
+      switch (modrm) {
+        case 0xd0: return 0;
+        case 0xe0: st_set(0, -st_get(0)); return 0;
+        case 0xe1: { f64 v = st_get(0); union { f64 d; u64 u; } x = {v}; x.u &= ~(1ull << 63); st_set(0, x.d); return 0; }
+        case 0xe4: { FSW = (u16)(FSW & ~SW_C1); fcom_flags(st_get(0), 0.0); return 0; }
+        case 0xe5: { // FXAM
+          u32 sw = FSW & ~SW_CC;
+          union { f64 d; u64 u; } x = {*stx(0)};
+          if (x.u >> 63) sw |= SW_C1;
+          if (st_empty(0)) sw |= SW_C3 | SW_C0;
+          else {
+            u32 e = (u32)((x.u >> 52) & 0x7ff);
+            u64 m = x.u & 0xfffffffffffffull;
+            if (e == 0x7ff) sw |= m ? SW_C0 : (SW_C2 | SW_C0);
+            else if (e == 0) sw |= m ? (SW_C2 | SW_C3) : SW_C3;
+            else sw |= SW_C2;
+          }
+          FSW = (u16)sw;
+          return 0;
+        }
+        case 0xe8: push(1.0); return 0;
+        case 0xe9: push(3.321928094887362347870319429489390175865); return 0;
+        case 0xea: push(1.442695040888963407359924681001892137427); return 0;
+        case 0xeb: push(3.141592653589793238462643383279502884197); return 0;
+        case 0xec: push(0.301029995663981195213738894724493026768); return 0;
+        case 0xed: push(0.693147180559945309417232121458176568076); return 0;
+        case 0xee: push(0.0); return 0;
+        case 0xf0: st_set(0, js_pow(2.0, st_get(0)) - 1.0); return 0; // F2XM1
+        case 0xf1: { f64 x = st_get(1), y = st_get(0); pop(); st_set(0, x * js_log2(y)); return 0; } // FYL2X
+        case 0xf2: { f64 v = st_get(0); st_set(0, js_tan(v)); push(1.0); FSW = (u16)(FSW & ~SW_C2); return 0; } // FPTAN
+        case 0xf3: { f64 x = st_get(1), y = st_get(0); pop(); st_set(0, js_atan2(x, y)); return 0; } // FPATAN
+        case 0xf4: { // FXTRACT
+          f64 v = st_get(0);
+          union { f64 d; u64 u; } x = {v};
+          s32 e = (s32)((x.u >> 52) & 0x7ff) - 1023;
+          x.u = (x.u & ~(0x7ffull << 52)) | (1023ull << 52);
+          st_set(0, (f64)e);
+          push(x.d);
+          return 0;
+        }
+        case 0xf5: case 0xf8: { // FPREM1 / FPREM
+          f64 a = st_get(0), b = st_get(1);
+          f64 r, q;
+          if (b == 0 || a != a || b != b || (a - a) != 0) { // invalid operation
+            st_set(0, qnan());
+            FSW = (u16)((FSW & ~SW_CC) | SW_IE);
+            return 0;
+          }
+          if (modrm == 0xf5) {
+            q = round_rc(a / b, 0);
+            r = a - q * b;
+          } else {
+            r = js_fmod(a, b);
+            q = round_rc((a - r) / b, 0);
+          }
+          st_set(0, r);
+          u64 qi = (u64)(q < 0 ? -q : q);
+          u32 sw = FSW & ~SW_CC; // complete reduction: C2 = 0, C0/C3/C1 = Q2/Q1/Q0
+          if (qi & 4) sw |= SW_C0;
+          if (qi & 2) sw |= SW_C3;
+          if (qi & 1) sw |= SW_C1;
+          FSW = (u16)sw;
+          return 0;
+        }
+        case 0xf6: ST32(S_FTOP) = (FTOP - 1) & 7; return 0;
+        case 0xf7: ST32(S_FTOP) = (FTOP + 1) & 7; return 0;
+        case 0xf9: { f64 x = st_get(1), y = st_get(0); pop(); st_set(0, x * js_log2(y + 1.0)); return 0; } // FYL2XP1
+        case 0xfa: { f64 v = st_get(0); union { f64 d; u64 u; } z = {v}; (void)z; st_set(0, __builtin_sqrt(v)); return 0; }
+        case 0xfb: { f64 v = st_get(0); st_set(0, js_sin(v)); push(js_cos(v)); FSW = (u16)(FSW & ~SW_C2); return 0; } // FSINCOS
+        case 0xfc: st_set(0, round_rc(st_get(0), rc_mode())); return 0;
+        case 0xfd: { // FSCALE: st0 * 2^trunc(st1) by exponent adjustment
+          f64 v = st_get(0), n = round_rc(st_get(1), 3);
+          if (n > 70000) n = 70000;
+          if (n < -70000) n = -70000;
+          s32 k = (s32)n;
+          while (k > 1000) { v *= 8.98846567431158e307; k -= 1023; }
+          while (k < -1000) { v *= 1.1125369292536007e-308; k += 1022; }
+          st_set(0, v * js_pow(2.0, (f64)k));
+          return 0;
+        }
+        case 0xfe: st_set(0, js_sin(st_get(0))); FSW = (u16)(FSW & ~SW_C2); return 0;
+        case 0xff: st_set(0, js_cos(st_get(0))); FSW = (u16)(FSW & ~SW_C2); return 0;
+      }
+      if (modrm >= 0xc0 && modrm <= 0xc7) { push(st_get(rm)); return 0; } // FLD sti
+      if (modrm >= 0xc8 && modrm <= 0xcf) { // FXCH
+        f64 a = st_get(0), b = st_get(rm);
+        st_set(0, b);
+        st_set(rm, a);
+        return 0;
+      }
+      return 0;
+    }
+    case 3: { // DB
+      if (mem) {
+        switch (reg) {
+          case 0: push((f64)*(volatile int *)ea); return 0;
+          case 1: { int b2; u64 v = f2i64(st_get(0), 3, 32, &b2); *(volatile u32 *)ea = (u32)v; pop(); return 0; }
+          case 2: case 3: {
+            u64 v = f2i64(st_get(0), rc_mode(), 32, &bad);
+            if (bad) FSW = (u16)(FSW | SW_IE);
+            *(volatile u32 *)ea = (u32)v;
+            if (reg == 3) pop();
+            return 0;
+          }
+          case 5: push(load80(ea)); return 0;
+          case 7: store80(ea, st_get(0)); pop(); return 0;
+        }
+        return 0;
+      }
+      if (modrm >= 0xc0 && modrm < 0xe0) { if (ea) st_set(0, st_get(rm)); return 0; } // FCMOVNcc
+      if (modrm == 0xe2) { FSW = (u16)(FSW & 0x7f00); return 0; } // FNCLEX
+      if (modrm == 0xe3) { FCW = 0x37f; FSW = 0; ST32(S_FTOP) = 0; FTAG = 0xffff; return 0; } // FNINIT
+      if (modrm >= 0xe8 && modrm <= 0xf7) { // FUCOMI / FCOMI
+        return fcomi_flags(st_get(0), st_get(rm));
+      }
+      return 0;
+    }
+    case 5: { // DD
+      if (mem) {
+        switch (reg) {
+          case 0: push(*(volatile f64 *)ea); return 0;
+          case 1: { int b2; u64 v = f2i64(st_get(0), 3, 64, &b2); *(volatile u64 *)ea = v; pop(); return 0; }
+          case 2: *(volatile f64 *)ea = st_get(0); return 0;
+          case 3: *(volatile f64 *)ea = st_get(0); pop(); return 0;
+          case 4: { // FRSTOR
+            fldenv(ea);
+            for (u32 i = 0; i < 8; i++) *phys(FTOP + i) = load80(ea + 28 + i * 10);
+            return 0;
+          }
+          case 6: { // FNSAVE
+            fnstenv(ea);
+            for (u32 i = 0; i < 8; i++) store80(ea + 28 + i * 10, *phys(FTOP + i));
+            FCW = 0x37f; FSW = 0; ST32(S_FTOP) = 0; FTAG = 0xffff;
+            return 0;
+          }
+          case 7: *(volatile u16 *)ea = (u16)sw_value(); return 0;
+        }
+        return 0;
+      }
+      switch (reg) {
+        case 0: set_tag(FTOP + rm, 1); return 0; // FFREE
+        case 2: st_set(rm, st_get(0)); return 0; // FST sti
+        case 3: st_set(rm, st_get(0)); pop(); return 0; // FSTP sti
+        case 4: fcom_flags(st_get(0), st_get(rm)); return 0; // FUCOM
+        case 5: fcom_flags(st_get(0), st_get(rm)); pop(); return 0; // FUCOMP
+      }
+      return 0;
+    }
+    case 7: { // DF
+      if (mem) {
+        switch (reg) {
+          case 0: push((f64)*(volatile short *)ea); return 0;
+          case 1: { int b2; u64 v = f2i64(st_get(0), 3, 16, &b2); *(volatile u16 *)ea = (u16)v; pop(); return 0; }
+          case 2: case 3: {
+            u64 v = f2i64(st_get(0), rc_mode(), 16, &bad);
+            if (bad) FSW = (u16)(FSW | SW_IE);
+            *(volatile u16 *)ea = (u16)v;
+            if (reg == 3) pop();
+            return 0;
+          }
+          case 5: push((f64)*(volatile s64 *)ea); return 0;
+          case 7: {
+            u64 v = f2i64(st_get(0), rc_mode(), 64, &bad);
+            if (bad) FSW = (u16)(FSW | SW_IE);
+            *(volatile u64 *)ea = v;
+            pop();
+            return 0;
+          }
+        }
+        return 0;
+      }
+      if (modrm == 0xe0) return sw_value(); // FNSTSW AX
+      if (modrm >= 0xe8 && modrm <= 0xf7) { // FUCOMIP / FCOMIP
+        u32 fl = fcomi_flags(st_get(0), st_get(rm));
+        pop();
+        return fl;
+      }
+      return 0;
+    }
+  }
+  return 0;
+}
+
+// FXSAVE / FXRSTOR (512-byte legacy area)
+EXPORT void fxsave(u32 ea) {
+  *(volatile u16 *)(ea + 0) = FCW;
+  *(volatile u16 *)(ea + 2) = (u16)sw_value();
+  u8 abr = 0;
+  for (u32 i = 0; i < 8; i++) if (!tag_empty(i)) abr |= (u8)(1u << i);
+  *(volatile u8 *)(ea + 4) = abr;
+  *(volatile u32 *)(ea + 24) = ST32(S_MXCSR);
+  *(volatile u32 *)(ea + 28) = 0xffff;
+  for (u32 i = 0; i < 8; i++) {
+    store80(ea + 32 + i * 16, *stx(i));
+    *(volatile u16 *)(ea + 32 + i * 16 + 10) = 0;
+    *(volatile u32 *)(ea + 32 + i * 16 + 12) = 0;
+  }
+  for (u32 i = 0; i < 16; i++)
+    for (u32 k = 0; k < 4; k++) *(volatile u32 *)(ea + 160 + i * 16 + k * 4) = *(volatile u32 *)(STATE_BASE + S_XMM + i * 16 + k * 4);
+}
+EXPORT void fxrstor(u32 ea) {
+  FCW = *(volatile u16 *)(ea + 0);
+  u16 sw = *(volatile u16 *)(ea + 2);
+  FSW = sw & ~0x3800u;
+  ST32(S_FTOP) = (sw >> 11) & 7;
+  u8 abr = *(volatile u8 *)(ea + 4);
+  u16 tags = 0;
+  for (u32 i = 0; i < 8; i++) tags |= (u16)(((abr >> i) & 1) ? 0 : 3) << (i * 2);
+  FTAG = tags;
+  ST32(S_MXCSR) = *(volatile u32 *)(ea + 24);
+  for (u32 i = 0; i < 8; i++) *stx(i) = load80(ea + 32 + i * 16);
+  for (u32 i = 0; i < 16; i++)
+    for (u32 k = 0; k < 4; k++) *(volatile u32 *)(STATE_BASE + S_XMM + i * 16 + k * 4) = *(volatile u32 *)(ea + 160 + i * 16 + k * 4);
+}

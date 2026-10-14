@@ -9,7 +9,7 @@ const { i32: I32, i64: I64, v128: V128 } = VT;
 /** Indices of imported functions, fixed for every generated module. */
 export const IMP = {
   cc_eval: 0, cc_getflags: 1, lookup: 2, mulhi_u64: 3, mulhi_s64: 4, div128: 5,
-  rep_movs: 6, rep_stos: 7, rep_cmps: 8, rep_scas: 9, rot_carry: 10, host: 11, hle: 12, smc: 13,
+  rep_movs: 6, rep_stos: 7, rep_cmps: 8, rep_scas: 9, rot_carry: 10, host: 11, hle: 12, smc: 13, x87: 14, fxsave: 15, fxrstor: 16,
 } as const;
 
 export function declareImports(mb: ModuleBuilder) {
@@ -29,6 +29,9 @@ export function declareImports(mb: ModuleBuilder) {
   mb.importFunc("env", "host", [I32, I32], [I32]);
   mb.importFunc("env", "hle", [I32], [I32]);
   mb.importFunc("env", "smc", [I32, I32], []);
+  mb.importFunc("rt", "x87", [I32, I32, I32], [I32]);
+  mb.importFunc("rt", "fxsave", [I32], []);
+  mb.importFunc("rt", "fxrstor", [I32], []);
 }
 
 export interface GenConfig {
