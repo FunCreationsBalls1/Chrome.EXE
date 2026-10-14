@@ -20,7 +20,7 @@ export interface RunResult {
 }
 
 /** Run a fixture exe to completion. `files` adds extra files to C:\app. */
-export function runFixture(name: string, opts: { args?: string; files?: Record<string, Uint8Array>; sysdll?: boolean; setup?: (p: ReturnType<typeof createProcess>) => void } = {}): RunResult {
+export function runFixture(name: string, opts: { args?: string; files?: Record<string, Uint8Array>; sysdll?: boolean; host?: import("../src/win32/host.ts").Host; setup?: (p: ReturnType<typeof createProcess>) => void } = {}): RunResult {
   const out: number[] = [], err: number[] = [];
   const log: string[] = [];
   const exePath = "C:\\app\\" + name;
@@ -30,6 +30,7 @@ export function runFixture(name: string, opts: { args?: string; files?: Record<s
     stdout: (b) => out.push(...b),
     stderr: (b) => err.push(...b),
     log: (s) => log.push(s),
+    host: opts.host,
   });
   p.vfs.mkdirs("C:\\app");
   const data = new Uint8Array(readFileSync(join(FIXTURES, name)));

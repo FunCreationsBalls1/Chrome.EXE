@@ -15,6 +15,7 @@ const specs = {
   hello_crt: { flags: ["-O2"] },
   cpp_exceptions: { flags: ["-O2", "-static"] },
   seh_try: { clang: true },
+  win_basic: { flags: ["-O2", "-mconsole"], libs: ["-luser32", "-lgdi32", "-lkernel32"] },
 };
 for (const f of readdirSync(src)) {
   const m = /^(.*)\.(c|cpp)$/.exec(f);

@@ -11,6 +11,8 @@ import {
   DIR_EXPORT, DIR_TLS, parseDelayImports, parseExports, parseImports, parsePe, parseTls, iterRelocs, PeError,
 } from "../pe/pe.ts";
 import type { PeImage, TlsInfo } from "../pe/pe.ts";
+import type { Host } from "./host.ts";
+import { NullHost } from "./host.ts";
 
 export class ProcessExit extends Error {
   isControlFlow = true;
@@ -113,6 +115,7 @@ export interface ProcessOptions {
   strictImports?: boolean;
   pages?: number;
   smc?: boolean;
+  host?: Host;
 }
 
 const LIST_ENTRY = 16;
@@ -124,6 +127,7 @@ export class Process {
   readonly cpu: Cpu;
   readonly hle: Hle;
   readonly vfs: Vfs;
+  readonly host: Host;
   readonly handles = new HandleTable();
   readonly heaps = new Map<number, Heap>();
   readonly modules: LoadedModule[] = [];
@@ -163,6 +167,7 @@ export class Process {
     this.cpu = new Cpu(this.m);
     this.hle = new Hle(this.m);
     this.vfs = opts.vfs ?? new Vfs();
+    this.host = opts.host ?? new NullHost();
     this.exePath = opts.exePath ?? "C:\\app.exe";
     this.cmdline = opts.cmdline ?? `"${this.exePath}"`;
     this.cwd = opts.cwd ?? this.exePath.slice(0, this.exePath.lastIndexOf("\\"));

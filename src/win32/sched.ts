@@ -54,6 +54,8 @@ export class Scheduler {
   readonly p: Process;
   private rr = 0;
   sliceBudget = 1 << 17;
+  /** how long an idle process (only external events can wake it) is tolerated by the synchronous driver */
+  idleLimitMs = 5000;
   lastSliceStart = 0;
   constructor(p: Process) {
     this.p = p;
@@ -205,15 +207,23 @@ export class Scheduler {
 
   /** Synchronous driver: run until the process exits. Sleeps are busy-waited (tests / non-browser use). */
   runToCompletion(maxSteps = Infinity): number {
+    let idleSince = 0;
     for (let i = 0; i < maxSteps; i++) {
       const r = this.step();
       if (r.kind === "done") return r.code;
       if (r.kind === "sleep") {
         const dt = r.until - performance.now();
         if (dt > 0) this.spinWait(dt);
+        idleSince = 0;
       } else if (r.kind === "idle") {
-        throw new Error("deadlock: all threads are blocked with no timeout\n" + this.describeBlocked());
-      }
+        // every thread waits on an external event (window messages, timers, host input): let the embedder pump
+        if (this.p.idleHook) {
+          const now = performance.now();
+          if (!idleSince) idleSince = now;
+          if (now - idleSince > this.idleLimitMs) throw new Error("deadlock: all threads are blocked with no timeout\n" + this.describeBlocked());
+          this.p.idleHook(now + 4);
+        } else throw new Error("deadlock: all threads are blocked with no timeout\n" + this.describeBlocked());
+      } else idleSince = 0;
     }
     throw new Error("scheduler step limit exceeded");
   }
