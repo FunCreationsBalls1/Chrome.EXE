@@ -439,6 +439,14 @@ function leave(g: Gen, _ins: Insn) {
 // ---------------------------------------------------------------------------------------------
 // Shifts and rotates
 // ---------------------------------------------------------------------------------------------
+/** A 32-bit register destination is zero-extended to 64 bits even when the operation has no effect. */
+function zeroExtendIfReg32(g: Gen, ins: Insn) {
+  if (ins.osz === 4 && ins.a.k === K_REG) {
+    g.readReg(ins.a.r, 4);
+    g.writeReg(ins.a.r, 4);
+  }
+}
+
 function loadCount(g: Gen, cnt: number, cntIsImm: boolean, cimm: number, cmask: number) {
   const f = g.f;
   if (cntIsImm) f.i32(cimm);
@@ -458,7 +466,10 @@ function shift(g: Gen, ins: Insn) {
   const cntIsImm = ins.b.k === K_IMM;
   const cmask = wide ? 63 : 31;
   const cimm = cntIsImm ? ins.b.imm & cmask : -1;
-  if (cntIsImm && cimm === 0) return; // no effect at all
+  if (cntIsImm && cimm === 0) {
+    zeroExtendIfReg32(g, ins);
+    return; // flags and (otherwise) the operand are untouched
+  }
   const needFlags = g.liveAfter !== 0;
 
   const cnt = tmp(g, I32);
@@ -523,7 +534,10 @@ function rotate(g: Gen, ins: Insn) {
   const cntIsImm = ins.b.k === K_IMM;
   const cmask = wide ? 63 : 31;
   const cimm = cntIsImm ? ins.b.imm & cmask : -1;
-  if (cntIsImm && cimm === 0) return;
+  if (cntIsImm && cimm === 0) {
+    zeroExtendIfReg32(g, ins);
+    return;
+  }
   const needFlags = g.liveAfter !== 0;
 
   const cnt = tmp(g, I32);
@@ -586,6 +600,71 @@ function rotate(g: Gen, ins: Insn) {
   f.freeTemp(I32, cnt);
 }
 
+function rotCarry(g: Gen, ins: Insn) {
+  const f = g.f;
+  const sz = ins.osz;
+  const wide = sz === 8;
+  const right = ins.op === Op.RCR;
+  const cntIsImm = ins.b.k === K_IMM;
+  const cmask = wide ? 63 : 31;
+  const cimm = cntIsImm ? ins.b.imm & cmask : -1;
+  if (cntIsImm && cimm === 0) {
+    zeroExtendIfReg32(g, ins);
+    return;
+  }
+  const needFlags = g.liveAfter !== 0;
+  const cnt = tmp(g, I32);
+  loadCount(g, cnt, cntIsImm, cimm, cmask);
+  const cf0 = tmp(g, I32);
+  g.emitFlagBit(L.F_CF);
+  f.set(cf0);
+  let oldFl = -1;
+  if (needFlags) {
+    oldFl = tmp(g, I32);
+    g.emitEflags();
+    f.set(oldFl);
+  }
+  const p = place(g, ins.a, sz);
+  const R = tmp(g, ty(sz));
+  storePlace(g, p, () => {
+    f.i32(right ? 1 : 0).i32(szl(sz));
+    loadPlace(g, p);
+    if (!wide) f.op(O.i64_extend_i32_u);
+    f.get(cnt).get(cf0).call(IMP.rot_carry);
+    if (!wide) f.op(O.i32_wrap_i64);
+    f.tee(R);
+  });
+  freePlace(g, p);
+  if (needFlags) {
+    const bitsM1 = sz * 8 - 1;
+    const cf = tmp(g, I32), of = tmp(g, I32);
+    f.i32(0).mem(O.i32_load, L.STATE + L.S_SCRATCH, 2).set(cf);
+    const bit = (n: number) => {
+      f.get(R);
+      if (wide) f.i64(n).op(O.i64_shr_u).op(O.i32_wrap_i64);
+      else f.i32(n).op(O.i32_shr_u);
+      f.i32(1).op(O.i32_and);
+    };
+    if (right) {
+      bit(bitsM1);
+      bit(bitsM1 - 1);
+      f.op(O.i32_xor).set(of);
+    } else {
+      bit(bitsM1);
+      f.get(cf).op(O.i32_xor).set(of);
+    }
+    f.get(oldFl).i32(~(L.F_CF | L.F_OF)).op(O.i32_and).get(cf).op(O.i32_or).get(of).i32(11).op(O.i32_shl).op(O.i32_or);
+    if (!cntIsImm) f.get(oldFl).get(cnt).op(O.select);
+    g.setFlagsFromEflags();
+    f.freeTemp(I32, cf);
+    f.freeTemp(I32, of);
+    f.freeTemp(I32, oldFl);
+  }
+  f.freeTemp(ty(sz), R);
+  f.freeTemp(I32, cf0);
+  f.freeTemp(I32, cnt);
+}
+
 function shiftd(g: Gen, ins: Insn) {
   // SHLD / SHRD dst, src, count
   const f = g.f;
@@ -606,45 +685,40 @@ function shiftd(g: Gen, ins: Insn) {
 
   const compute = () => {
     loadPlace(g, p);
-    f.tee(A);
+    f.set(A);
     if (sz === 4 || sz === 2) {
-      // build 64-bit concatenation
+      // 64-bit window: SHLD uses (x:src) << c and takes the high half; SHRD uses (src:x) >> c and takes the low half
       const t = tmp(g, I64);
+      const bits = sz * 8;
       if (isLeft) {
-        // (x << bits) | src ; result = (t << c) >> bits
-        f.op(O.i64_extend_i32_u).i64(sz * 8).op(O.i64_shl);
+        f.get(A).op(O.i64_extend_i32_u).i64(bits).op(O.i64_shl);
         src(g, ins.b, sz);
         f.op(O.i64_extend_i32_u).op(O.i64_or).set(t);
-        if (sz === 2) {
-          // for 16-bit use 32-bit window repeated: count > 16 behaviour undefined; match common hardware: rotate in 32-bit
-          f.get(t).get(cnt).op(O.i64_extend_i32_u).op(O.i64_shl).i64(16).op(O.i64_shr_u).op(O.i32_wrap_i64).i32(0xffff).op(O.i32_and);
-        } else {
-          f.get(t).get(cnt).op(O.i64_extend_i32_u).op(O.i64_shl).i64(32).op(O.i64_shr_u).op(O.i32_wrap_i64);
-        }
+        f.get(t).get(cnt).op(O.i64_extend_i32_u).op(O.i64_shl).i64(bits).op(O.i64_shr_u).op(O.i32_wrap_i64);
       } else {
-        // t = (src << bits) | x ; result = low bits of (t >> c)
         src(g, ins.b, sz);
-        f.op(O.i64_extend_i32_u).i64(sz * 8).op(O.i64_shl);
+        f.op(O.i64_extend_i32_u).i64(bits).op(O.i64_shl);
         f.get(A).op(O.i64_extend_i32_u).op(O.i64_or).set(t);
         f.get(t).get(cnt).op(O.i64_extend_i32_u).op(O.i64_shr_u).op(O.i32_wrap_i64);
-        if (sz === 2) f.i32(0xffff).op(O.i32_and);
       }
+      if (sz === 2) f.i32(0xffff).op(O.i32_and);
       f.freeTemp(I64, t);
     } else {
-      // 64-bit: c in 1..63
-      const s = tmp(g, I64);
+      // 64-bit, count in 0..63 (count 0 leaves the operand alone)
+      const s2 = tmp(g, I64);
       src(g, ins.b, 8);
-      f.set(s);
+      f.set(s2);
       const c64 = tmp(g, I64);
       f.get(cnt).op(O.i64_extend_i32_u).set(c64);
       if (isLeft) {
         f.get(A).get(c64).op(O.i64_shl);
-        f.get(s).i64(64).get(c64).op(O.i64_sub).op(O.i64_shr_u).op(O.i64_or);
+        f.get(s2).i64(64).get(c64).op(O.i64_sub).op(O.i64_shr_u).op(O.i64_or);
       } else {
         f.get(A).get(c64).op(O.i64_shr_u);
-        f.get(s).i64(64).get(c64).op(O.i64_sub).op(O.i64_shl).op(O.i64_or);
+        f.get(s2).i64(64).get(c64).op(O.i64_sub).op(O.i64_shl).op(O.i64_or);
       }
-      f.freeTemp(I64, s);
+      f.get(A).get(c64).i64(0).op(O.i64_ne).op(O.select); // count == 0 -> original operand
+      f.freeTemp(I64, s2);
       f.freeTemp(I64, c64);
     }
     f.tee(R);
@@ -1087,6 +1161,7 @@ function bitScan(g: Gen, ins: Insn) {
     case Op.POPCNT:
       f.get(x).op(T.popcnt);
       f.set(r);
+      f.get(r);
       g.writeReg(ins.a.r, sz);
       break;
     case Op.TZCNT:
@@ -1640,6 +1715,7 @@ export function translateInt(g: Gen, ins: Insn): boolean {
     case Op.LEAVE: leave(g, ins); return true;
     case Op.SHL: case Op.SHR: case Op.SAR: shift(g, ins); return true;
     case Op.ROL: case Op.ROR: rotate(g, ins); return true;
+    case Op.RCL: case Op.RCR: rotCarry(g, ins); return true;
     case Op.SHLD: case Op.SHRD: shiftd(g, ins); return true;
     case Op.MUL: case Op.IMUL1: mulWide(g, ins); return true;
     case Op.IMUL2: case Op.IMUL3: imulTrunc(g, ins); return true;

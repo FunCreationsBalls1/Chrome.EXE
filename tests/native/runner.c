@@ -94,7 +94,7 @@ int main(void) {
   memset(&sa, 0, sizeof sa);
   sa.sa_sigaction = on_sig;
   sa.sa_flags = SA_SIGINFO | SA_ONSTACK | SA_NODEFER;
-  sigaction(SIGSEGV, &sa, 0); sigaction(SIGFPE, &sa, 0); sigaction(SIGILL, &sa, 0); sigaction(SIGTRAP, &sa, 0); sigaction(SIGBUS, &sa, 0);
+  sigaction(SIGSEGV, &sa, 0); sigaction(SIGFPE, &sa, 0); sigaction(SIGILL, &sa, 0); sigaction(SIGTRAP, &sa, 0); sigaction(SIGBUS, &sa, 0); sigaction(SIGALRM, &sa, 0);
   setvbuf(stdout, NULL, _IOFBF, 1 << 20);
   for (;;) {
     uint32_t len;
@@ -115,7 +115,9 @@ int main(void) {
     got_sig = 0;
     uint32_t sig = 0;
     if (sigsetjmp(jb, 1) == 0) {
+      alarm(1);
       run_code();
+      alarm(0);
     } else {
       sig = got_sig;
     }

@@ -300,3 +300,24 @@ EXPORT u32 rep_scas(u32 rdi, u32 count, u64 val, u32 size, u32 df, u32 repne) {
   ST64(S_SCRATCH) = rdi;
   return count;
 }
+
+// RCL / RCR: rotate through carry. `count` is already masked to 5/6 bits. New carry is stored in the first scratch word.
+EXPORT u64 rot_carry(u32 right, u32 szl, u64 val, u32 count, u32 cf) {
+  u32 bits = 8u << szl;
+  u64 m = szmask(szl);
+  val &= m;
+  if (bits < 32) count %= (bits + 1);
+  for (u32 i = 0; i < count; i++) {
+    if (!right) {
+      u32 out = (u32)((val >> (bits - 1)) & 1);
+      val = ((val << 1) | cf) & m;
+      cf = out;
+    } else {
+      u32 out = (u32)(val & 1);
+      val = (val >> 1) | ((u64)cf << (bits - 1));
+      cf = out;
+    }
+  }
+  ST32(S_SCRATCH) = cf;
+  return val;
+}

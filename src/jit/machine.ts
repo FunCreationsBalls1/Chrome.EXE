@@ -137,7 +137,7 @@ export class Machine implements TranslatorHost {
     const rt = this.rt as any;
     return {
       cc_eval: rt.cc_eval, cc_getflags: rt.cc_getflags, lookup: rt.lookup, mulhi_u64: rt.mulhi_u64, mulhi_s64: rt.mulhi_s64,
-      div128: rt.div128, rep_movs: rt.rep_movs, rep_stos: rt.rep_stos, rep_cmps: rt.rep_cmps, rep_scas: rt.rep_scas,
+      div128: rt.div128, rep_movs: rt.rep_movs, rep_stos: rt.rep_stos, rep_cmps: rt.rep_cmps, rep_scas: rt.rep_scas, rot_carry: rt.rot_carry,
     };
   }
 
@@ -267,7 +267,9 @@ export class Machine implements TranslatorHost {
   run(pc: number, maxSteps = Infinity): number {
     let steps = 0;
     this.dv.setUint32(L.STATE + L.S_BUDGET, 1 << 30, true);
+    let guard = 0;
     for (;;) {
+      if (++guard > 2_000_000) throw new Error(`run loop runaway at pc=${pc.toString(16)}`);
       let slot = this.slotMap.get(pc);
       if (slot === undefined || !this.compiled.has(pc)) {
         this.compile(pc);

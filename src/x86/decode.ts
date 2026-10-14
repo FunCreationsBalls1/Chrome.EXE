@@ -16,7 +16,7 @@ export class Opd {
   r = 0;
   /** size in bytes (1,2,4,8,16) */
   sz = 0;
-  /** true when this is AH/CH/DH/BH (r is 4..7 and refers to the high byte of reg r-4) */
+  /** true when this is AH/CH/DH/BH (r is the underlying register 0..3 and bits 15:8 are selected) */
   hi8 = false;
   // memory: ea = base + index*scale + disp (base/index = -1 when absent). For RIP-relative the final
   // absolute address is folded into disp (and base=-1).
@@ -90,7 +90,9 @@ function mkReg(r: number, sz: number, rex: number): Opd {
   o.r = r;
   o.sz = sz;
   if (sz === 1 && rex === 0 && r >= 4 && r < 8) {
+    // AH/CH/DH/BH: r holds the underlying register (0-3), hi8 selects bits 15:8
     o.hi8 = true;
+    o.r = r - 4;
   }
   return o;
 }
@@ -1050,7 +1052,7 @@ export function regName(r: number, sz: number, hi8 = false): string {
   if (sz === 8) return R64[r];
   if (sz === 4) return R32[r];
   if (sz === 2) return R16[r];
-  return hi8 ? R8H[r - 4] : R8[r];
+  return hi8 ? R8H[r] : R8[r];
 }
 
 export function fmtOpd(o: Opd): string {

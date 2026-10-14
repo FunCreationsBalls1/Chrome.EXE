@@ -92,7 +92,7 @@ export function randCase(r: Rng, code: Uint8Array, opts: { fixed?: Record<number
 
 // ---- assembling with nasm ----
 export const FLAGSLOT = 1000; // scratch offset where captured EFLAGS are stored
-const CAPTURE = `\npushfq\npop qword [abs ${SCRATCH + FLAGSLOT}]\n`;
+const CAPTURE = `\nlea rsp, [rsp-192]\npushfq\npop qword [abs ${SCRATCH + FLAGSLOT}]\nlea rsp, [rsp+192]\n`;
 export function assemble(snippets: string[], capture = true): Uint8Array[] {
   const dir = mkdtempSync(join(tmpdir(), "asm-"));
   const build = (list: string[]) => {
