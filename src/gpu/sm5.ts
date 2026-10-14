@@ -53,6 +53,8 @@ export interface Sm5Shader {
   /** texture slots used with comparison sampling */
   cmpTextures: Set<number>;
   atomicUavs: Set<number>;
+  /** typed UAV slots the shader loads from (others are write-only storage textures) */
+  uavReads: Set<number>;
   atomicTgsm: Set<number>;
   usesDiscard: boolean;
   /** input registers declared by the instruction stream: reg -> {mask, kind} */
@@ -121,7 +123,7 @@ export function parseDxbc(data: Uint8Array): Sm5Shader {
   let code: Uint8Array | null = null;
   const sh: Sm5Shader = {
     type: 0, major: 5, minor: 0, ins: [], inputs: [], outputs: [], patch: [], cbs: new Map(), srvs: new Map(), samplers: new Map(), uavs: new Map(), tgsm: new Map(), temps: 0, indexableTemps: new Map(),
-    icb: null, threadGroup: [1, 1, 1], flags: 0, unsupported: [], cmpTextures: new Set(), atomicUavs: new Set(), atomicTgsm: new Set(), usesDiscard: false, declIn: new Map(), declOut: new Map(),
+    icb: null, threadGroup: [1, 1, 1], flags: 0, unsupported: [], cmpTextures: new Set(), atomicUavs: new Set(), uavReads: new Set(), atomicTgsm: new Set(), usesDiscard: false, declIn: new Map(), declOut: new Map(),
     outDepth: false, outMask: false, inputSpecials: new Set(),
   };
   for (let i = 0; i < count; i++) {
@@ -275,6 +277,7 @@ function decodeTokens(sh: Sm5Shader, code: Uint8Array) {
     switch (i.op) {
       case OPC.SAMPLE_C: case OPC.SAMPLE_C_LZ: case OPC.GATHER4_C: case OPC.GATHER4_PO_C: sh.cmpTextures.add(i.ops[2].idx[0].imm); break;
       case OPC.DISCARD: sh.usesDiscard = true; break;
+      case OPC.LD_UAV_TYPED: sh.uavReads.add(i.ops[2].idx[0].imm); break;
       case OPC.ATOMIC_AND: case OPC.ATOMIC_OR: case OPC.ATOMIC_XOR: case OPC.ATOMIC_CMP_STORE: case OPC.ATOMIC_IADD: case OPC.ATOMIC_IMAX: case OPC.ATOMIC_IMIN: case OPC.ATOMIC_UMAX: case OPC.ATOMIC_UMIN: {
         const o = i.ops[0];
         if (o.type === OT.UAV) sh.atomicUavs.add(o.idx[0].imm); else if (o.type === OT.THREAD_GROUP_SHARED_MEMORY) sh.atomicTgsm.add(o.idx[0].imm);
@@ -1066,13 +1069,12 @@ class Emitter5 {
     for (const slot of [...sh.srvs.keys()].sort((a, b) => a - b)) decls.push(this.texDecl(slot, group));
     // uavs
     for (const [slot, u] of [...sh.uavs].sort((a, b) => a[0] - b[0])) {
-      const b = 64 + slot;
+      const b = 160 + slot;
       if (u.raw || u.structured || u.dim === 1) decls.push(`@group(${group}) @binding(${b}) var<storage, read_write> u${slot}: ${sh.atomicUavs.has(slot) ? "array<atomic<u32>>" : "array<u32>"};`);
       else {
         const fmt = link.uavFormats?.get(slot) ?? "rgba8unorm";
         const ty = u.dim === 5 ? "texture_storage_3d" : u.dim === 8 ? "texture_storage_2d_array" : u.dim === 2 || u.dim === 7 ? "texture_storage_1d" : "texture_storage_2d";
-        const acc = u.ret[0] === 0 ? "write" : "read_write";
-        decls.push(`@group(${group}) @binding(${b}) var u${slot}: ${ty}<${fmt}, ${acc === "read_write" ? "read_write" : "read_write"}>;`);
+        decls.push(`@group(${group}) @binding(${b}) var u${slot}: ${ty}<${fmt}, ${sh.uavReads.has(slot) ? "read_write" : "write"}>;`);
       }
     }
     // thread group shared memory
@@ -1104,6 +1106,7 @@ class Emitter5 {
           continue;
         }
         const kind = link.inputKinds?.get(reg) ?? "f";
+        if (kind === "z") { prologue.push(`v${reg} = vec4<f32>(0.0, 0.0, 0.0, 1.0);`); continue; }
         const ty = kind === "u" ? "vec4<u32>" : kind === "i" ? "vec4<i32>" : "vec4<f32>";
         entryIn.push(`@location(${reg}) i${reg}: ${ty}`);
         prologue.push(`v${reg} = ${kind === "f" ? `in.i${reg}` : `bitcast<vec4<f32>>(in.i${reg})`};`);

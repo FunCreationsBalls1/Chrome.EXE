@@ -10,8 +10,8 @@ export interface PendingClear {
 }
 
 export interface PassTarget {
-  colors: { view: GPUTextureView; tex: GPUTexture; format: GPUTextureFormat }[];
-  depth: { view: GPUTextureView; tex: GPUTexture; format: GPUTextureFormat } | null;
+  colors: ({ view: GPUTextureView; tex: GPUTexture; format: GPUTextureFormat; depthSlice?: number; resolve?: GPUTextureView } | null)[];
+  depth: { view: GPUTextureView; tex: GPUTexture; format: GPUTextureFormat; readOnlyDepth?: boolean; readOnlyStencil?: boolean } | null;
   width: number;
   height: number;
   samples: number;
@@ -59,7 +59,7 @@ export class Gpu {
     if (!adapter) return null;
     const g = new Gpu();
     g.adapter = adapter;
-    const want: GPUFeatureName[] = ["texture-compression-bc", "depth32float-stencil8", "float32-filterable", "float32-blendable", "clip-distances", "dual-source-blending", "indirect-first-instance", "bgra8unorm-storage", "rg11b10ufloat-renderable"] as GPUFeatureName[];
+    const want: GPUFeatureName[] = ["texture-compression-bc", "depth32float-stencil8", "float32-filterable", "float32-blendable", "clip-distances", "dual-source-blending", "indirect-first-instance", "bgra8unorm-storage", "rg11b10ufloat-renderable", "depth-clip-control", "texture-formats-tier1"] as GPUFeatureName[];
     const features = want.filter((f) => adapter.features.has(f));
     // request the best limits the adapter offers: D3D applications use many more resources than the WebGPU defaults
     const requiredLimits: Record<string, number> = {};
@@ -119,21 +119,39 @@ export class Gpu {
     this.resetRings();
   }
 
-  setPendingClear(tex: GPUTexture, c: PendingClear) {
+  /** how to flush a deferred clear without a draw: the attachment set that was used to request it */
+  pendingMeta = new Map<GPUTexture, PassTarget>();
+  setPendingClear(tex: GPUTexture, c: PendingClear, target?: PassTarget) {
     const cur = this.pending.get(tex) ?? {};
     this.pending.set(tex, { ...cur, ...c });
+    if (target) this.pendingMeta.set(tex, target);
   }
-  clearPending(tex: GPUTexture) { this.pending.delete(tex); }
+  /** apply a deferred clear of `tex` now (before the texture is read or copied) */
+  resolveTexture(tex: GPUTexture) {
+    const p = this.pending.get(tex);
+    if (!p) return;
+    const meta = this.pendingMeta.get(tex);
+    if (!p.color && p.depth === undefined && p.stencil === undefined) { this.pending.delete(tex); return; }
+    if (!meta) { this.pending.delete(tex); return; }
+    this.endPass();
+    this.renderPass(meta, "resolve");
+    this.endPass();
+  }
+  clearPending(tex: GPUTexture) { this.pending.delete(tex); this.pendingMeta.delete(tex); }
 
   /** The render pass for these targets; begins a new pass (applying pending clears) when the targets differ from the open one. */
   renderPass(t: PassTarget, key: string): GPURenderPassEncoder {
     if (this.pass && this.passKey === key) return this.pass;
     this.endPass();
-    const colorAttachments: GPURenderPassColorAttachment[] = t.colors.map((c) => {
+    const colorAttachments = t.colors.map((c) => {
+      if (!c) return null;
       const p = this.pending.get(c.tex);
-      if (p?.color) { const col = p.color; this.pending.set(c.tex, { ...p, color: undefined }); return { view: c.view, loadOp: "clear", storeOp: "store", clearValue: { r: col[0], g: col[1], b: col[2], a: col[3] } }; }
-      return { view: c.view, loadOp: "load", storeOp: "store" };
-    });
+      const extra: Partial<GPURenderPassColorAttachment> = {};
+      if (c.depthSlice !== undefined) extra.depthSlice = c.depthSlice;
+      if (c.resolve) extra.resolveTarget = c.resolve;
+      if (p?.color) { const col = p.color; this.pending.set(c.tex, { ...p, color: undefined }); return { view: c.view, loadOp: "clear", storeOp: "store", clearValue: { r: col[0], g: col[1], b: col[2], a: col[3] }, ...extra } as GPURenderPassColorAttachment; }
+      return { view: c.view, loadOp: "load", storeOp: "store", ...extra } as GPURenderPassColorAttachment;
+    }) as GPURenderPassColorAttachment[];
     const desc: GPURenderPassDescriptor = { colorAttachments };
     if (t.depth) {
       const p = this.pending.get(t.depth.tex);
@@ -141,12 +159,18 @@ export class Gpu {
       const hasDepth = /depth/.test(t.depth.format);
       const da: GPURenderPassDepthStencilAttachment = { view: t.depth.view };
       if (hasDepth) {
-        if (p?.depth !== undefined) { da.depthLoadOp = "clear"; da.depthClearValue = p.depth; } else da.depthLoadOp = "load";
-        da.depthStoreOp = "store";
+        if (t.depth.readOnlyDepth) da.depthReadOnly = true;
+        else {
+          if (p?.depth !== undefined) { da.depthLoadOp = "clear"; da.depthClearValue = p.depth; } else da.depthLoadOp = "load";
+          da.depthStoreOp = "store";
+        }
       }
       if (hasStencil) {
-        if (p?.stencil !== undefined) { da.stencilLoadOp = "clear"; da.stencilClearValue = p.stencil; } else da.stencilLoadOp = "load";
-        da.stencilStoreOp = "store";
+        if (t.depth.readOnlyStencil) da.stencilReadOnly = true;
+        else {
+          if (p?.stencil !== undefined) { da.stencilLoadOp = "clear"; da.stencilClearValue = p.stencil; } else da.stencilLoadOp = "load";
+          da.stencilStoreOp = "store";
+        }
       }
       if (p) this.pending.set(t.depth.tex, { ...p, depth: undefined, stencil: undefined });
       desc.depthStencilAttachment = da;
@@ -304,6 +328,37 @@ struct Params { rect: vec4<f32>, src: vec4<f32> };
     pass.draw(4);
     pass.end();
     this.deferDestroy(ubuf);
+  }
+
+  /** Draw one texture view into another (same size or scaled) with the blit pipeline. */
+  blitViews(src: GPUTextureView, dst: GPUTextureView, dstFormat: GPUTextureFormat, filtered = true) {
+    this.endPass();
+    const pipeline = this.blitPipeline(dstFormat, filtered);
+    const ubuf = this.device.createBuffer({ size: 32, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    this.queue.writeBuffer(ubuf, 0, new Float32Array([-1, -1, 1, 1, 0, 1, 1, 0]));
+    const bg = this.device.createBindGroup({ layout: pipeline.getBindGroupLayout(0), entries: [{ binding: 0, resource: src }, { binding: 1, resource: this.blitSamplerFor(filtered) }, { binding: 2, resource: { buffer: ubuf } }] });
+    const pass = this.cmd().beginRenderPass({ colorAttachments: [{ view: dst, loadOp: "clear", storeOp: "store", clearValue: { r: 0, g: 0, b: 0, a: 0 } }] });
+    pass.setPipeline(pipeline);
+    pass.setBindGroup(0, bg);
+    pass.draw(4);
+    pass.end();
+    this.deferDestroy(ubuf);
+  }
+  /** Resolve a multisampled view into a single-sample view. */
+  resolveViews(src: GPUTextureView, dst: GPUTextureView) {
+    this.endPass();
+    const pass = this.cmd().beginRenderPass({ colorAttachments: [{ view: src, resolveTarget: dst, loadOp: "load", storeOp: "discard" }] });
+    pass.end();
+  }
+  /** Generate the mip chain of a 2D (array) texture from level 0 with a box/bilinear downsample. */
+  generateMips(tex: GPUTexture, viewFormat: GPUTextureFormat, layers: number) {
+    for (let layer = 0; layer < layers; layer++) {
+      for (let lvl = 1; lvl < tex.mipLevelCount; lvl++) {
+        const src = tex.createView({ format: viewFormat, dimension: "2d", baseMipLevel: lvl - 1, mipLevelCount: 1, baseArrayLayer: layer, arrayLayerCount: 1 });
+        const dst = tex.createView({ format: viewFormat, dimension: "2d", baseMipLevel: lvl, mipLevelCount: 1, baseArrayLayer: layer, arrayLayerCount: 1 });
+        this.blitViews(src, dst, viewFormat, true);
+      }
+    }
   }
 
   /** Read back a texture's mip-0 contents as tightly packed rows (async; the caller must drive completion). */
