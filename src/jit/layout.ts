@@ -7,7 +7,8 @@
 //   0x00001000 - 0x00001fff   CPU state (STATE)
 //   0x00002000 - 0x0000ffff   host scratch / C runtime stack lives below 0x1000
 //   0x00010000 - 0x0010ffff   block lookup cache (LOOKUP)
-//   0x00110000 - 0x0020ffff   code page table (one byte per 4K page of the first 1 GiB... see CODEPAGE)
+//   0x00100000 - 0x001fffff   code page table (one byte per 4 KiB page of the 4 GiB space)
+//   0x00300000 - 0x007fffff   HLE thunk region (synthetic export images + 16-byte call thunks)
 //   0x00800000 -              guest user space
 export const STATE = 0x1000;
 
@@ -48,7 +49,7 @@ export const LOOKUP_BITS = 16;
 export const LOOKUP_SIZE = (1 << LOOKUP_BITS) * 8;
 
 // Code page table: one byte per 4 KiB page for the full 4 GiB space (1 MiB). Non-zero => page has translated code.
-export const CODEPAGE = 0x110000;
+export const CODEPAGE = 0x100000;
 export const CODEPAGE_SIZE = 1 << 20;
 
 export const HOST_RESERVED_END = 0x00800000;
@@ -97,6 +98,6 @@ export const F_OF = 0x0800;
 export const F_ARITH = F_CF | F_PF | F_AF | F_ZF | F_SF | F_OF;
 
 // Thunk (HLE) region: each entry is 16 bytes. Calls into this region are intercepted by the translator.
-export const THUNK_BASE = 0x00200000;
-export const THUNK_SIZE = 0x00200000; // 128K thunks
+export const THUNK_BASE = 0x00300000;
+export const THUNK_SIZE = 0x00500000; // 5 MiB => 327K thunks
 export const THUNK_STRIDE = 16;

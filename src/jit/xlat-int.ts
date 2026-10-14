@@ -316,7 +316,7 @@ function lea(g: Gen, ins: Insn) {
       if (have) f.op(O.i64_add);
       have = true;
     }
-    const disp = BigInt(o.base < 0 && o.index < 0 ? o.disp >>> 0 : o.disp | 0);
+    const disp = o.base < 0 && o.index < 0 && !ins.seg ? g.codeAddr64(o.disp >>> 0) : BigInt(o.disp | 0);
     if (!have) f.i64(disp);
     else if (disp !== 0n) f.i64(disp).op(O.i64_add);
     g.writeReg(ins.a.r, 8);

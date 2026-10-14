@@ -21,6 +21,7 @@ export interface TranslatorHost {
   mem(): Uint8Array;
   slotFor(pc: number): number;
   smc: boolean;
+  virtHigh(addr: number): number;
 }
 
 export interface TraceResult {
@@ -153,6 +154,7 @@ export class Translator {
       slotFor: (pc) => this.host.slotFor(pc),
       smc: this.host.smc,
       flagsDeadAt: (pc) => this.flagsDeadAt(pc),
+      virtHigh: (a) => this.host.virtHigh(a),
     };
     const funcIdx: number[] = [];
     for (const pc of pcs) {
@@ -260,7 +262,7 @@ export class Translator {
         }
         case Op.CALL: {
           const ret = ins.addr + ins.len;
-          pushRaw64(g, () => f.i64(BigInt(ret)));
+          pushRaw64(g, () => f.i64(g.codeAddr64(ret)));
           g.emitJumpStatic(ins.target, ins.target <= ins.addr);
           terminated = true;
           break;
@@ -270,7 +272,7 @@ export class Translator {
           const t = f.temp(I32);
           src(g, ins.a, 8);
           f.op(O.i32_wrap_i64).set(t);
-          pushRaw64(g, () => f.i64(BigInt(ret)));
+          pushRaw64(g, () => f.i64(g.codeAddr64(ret)));
           f.get(t);
           g.emitJumpDynamic();
           f.freeTemp(I32, t);

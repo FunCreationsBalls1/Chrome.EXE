@@ -11,7 +11,7 @@
 #define CC_SHR 7u
 #define CC_SHRD 10u
 #define CC_SUB 2u
-#define CODEPAGE 1114112u
+#define CODEPAGE 1048576u
 #define CODEPAGE_SIZE 1048576u
 #define FK_DEBUG 8u
 #define FK_DIV 3u
@@ -69,6 +69,6 @@
 #define S_ST 512u
 #define S_STATUS 184u
 #define S_XMM 256u
-#define THUNK_BASE 2097152u
-#define THUNK_SIZE 2097152u
+#define THUNK_BASE 3145728u
+#define THUNK_SIZE 5242880u
 #define THUNK_STRIDE 16u

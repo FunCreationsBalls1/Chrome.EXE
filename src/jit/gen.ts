@@ -41,6 +41,8 @@ export interface GenConfig {
   smc: boolean;
   /** true if flags are known dead on entry to this guest address (for exit spill elision) */
   flagsDeadAt(pc: number): boolean;
+  /** high 32 bits of the guest-visible virtual address of a code/data address inside a high-mapped image */
+  virtHigh(addr: number): number;
 }
 
 // lazy flag source kinds (translator-local)
@@ -89,6 +91,11 @@ export class Gen {
     this.blockType = mb.type([I32], [I32]);
     this.bodyW = new Writer(4096);
     f.w = this.bodyW;
+  }
+
+  /** 64-bit guest-visible value of a code/data address (differs from the physical address inside high-mapped images) */
+  codeAddr64(addr: number): bigint {
+    return (BigInt(this.cfg.virtHigh(addr)) << 32n) | BigInt(addr >>> 0);
   }
 
   // ---------------------------------------------------------------------------------------

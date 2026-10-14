@@ -50,6 +50,23 @@ export class Machine implements TranslatorHost {
   private nextSlot = 1;
   private pending: number[] = [];
   thunks: HleFn[] = [];
+  /**
+   * Images that are not relocatable and are based above 4 GiB are mapped at (base mod 2^32); the guest keeps seeing
+   * their true 64-bit virtual addresses. Each window records the high 32 bits of that mapping.
+   */
+  highWindows: { pstart: number; pend: number; vhi: number }[] = [];
+  addHighWindow(pstart: number, size: number, vhi: number) {
+    this.highWindows.push({ pstart, pend: pstart + size, vhi });
+  }
+  /** high 32 bits of the guest-visible virtual address for physical (wasm) address `addr` */
+  virtHigh(addr: number): number {
+    for (const w of this.highWindows) if (addr >= w.pstart && addr < w.pend) return w.vhi;
+    return 0;
+  }
+  /** guest-visible 64-bit virtual address as a JS number (exact below 2^53) */
+  virt(addr: number): number {
+    return this.virtHigh(addr) * 4294967296 + (addr >>> 0);
+  }
   hostFn: (kind: number, arg: number) => number;
   log: (s: string) => void;
   moduleCount = 0;
@@ -265,6 +282,7 @@ export class Machine implements TranslatorHost {
    * `onYield` is called when the budget is exhausted; return false to stop.
    */
   run(pc: number, maxSteps = Infinity): number {
+    pc = pc >>> 0; // guest-visible virtual addresses map to wasm addresses by truncation
     let steps = 0;
     this.dv.setUint32(L.STATE + L.S_BUDGET, 1 << 30, true);
     let guard = 0;
@@ -339,7 +357,7 @@ export function cpuid(leaf: number, sub: number): [number, number, number, numbe
   switch (leaf) {
     case 0: return [0x0d, 0x756e6547, 0x6c65746e, 0x49656e69]; // "GenuineIntel"
     case 1: {
-      const ecx = (1 << 0) /*SSE3*/ | (1 << 9) /*SSSE3*/ | (1 << 13) /*CX16*/ | (1 << 19) /*SSE4.1*/ | (1 << 20) /*SSE4.2*/ |
+      const ecx = (1 << 0) /*SSE3*/ | (1 << 9) /*SSSE3*/ | (1 << 13) /*CX16*/ | (1 << 19) /*SSE4.1*/ |
         (1 << 23) /*POPCNT*/ | (1 << 31) /*hypervisor*/;
       const edx = (1 << 0) | (1 << 4) /*TSC*/ | (1 << 6) | (1 << 8) /*CX8*/ | (1 << 11) | (1 << 15) /*CMOV*/ | (1 << 23) /*MMX*/ |
         (1 << 24) /*FXSR*/ | (1 << 25) /*SSE*/ | (1 << 26) /*SSE2*/ | (1 << 13) | (1 << 3) | (1 << 5) | (1 << 9) | (1 << 12);
