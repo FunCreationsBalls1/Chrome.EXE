@@ -10,6 +10,7 @@ import { ProcessExit } from "./process.ts";
 import { ERROR } from "./k32-core.ts";
 import { INFINITE } from "./k32-sync.ts";
 import { RAX, RCX, RSP } from "./cpu.ts";
+import { ContinueSignal } from "./unwind.ts";
 
 export class BlockSignal extends Error {
   isControlFlow = true;
@@ -112,14 +113,27 @@ export class Scheduler {
       }
       m.dv.setBigUint64(L.STATE + L.S_GS_BASE, BigInt(t.teb), true);
       m.dv.setUint32(L.STATE + L.S_BUDGET, this.sliceBudget, true);
-      const st = m.run(pc, maxSteps);
-      if (st === L.ST_YIELD) {
-        t.ctx = this.snapshot();
-        t.state = "ready";
-        return "yield";
+      for (;;) {
+        try {
+          const st = m.run(pc, maxSteps);
+          if (st === L.ST_YIELD) {
+            t.ctx = this.snapshot();
+            t.state = "ready";
+            return "yield";
+          }
+          if (st === L.ST_FAULT) {
+            p.handleHardwareFault(t, m.faultKind, m.faultAddr); // always ends in a ContinueSignal or process exit
+          }
+          throw p.statusError(st);
+        } catch (e) {
+          if (e instanceof ContinueSignal) {
+            p.applyContext(e.ctx);
+            pc = m.rip;
+            continue;
+          }
+          throw e;
+        }
       }
-      // other statuses: faults and exits
-      throw p.statusError(st);
     } catch (e) {
       if (e instanceof BlockSignal) {
         // resume by re-executing the blocking call

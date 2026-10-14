@@ -9,6 +9,7 @@ import { installKernel32Strings } from "./k32-str.ts";
 import { installScheduler } from "./sched.ts";
 import { installNtdll } from "./ntdll.ts";
 import { installKernel32Seh } from "./k32-seh.ts";
+import { installUnwind } from "./unwind.ts";
 
 export type InstallFn = (p: Process) => void;
 const extraInstallers: InstallFn[] = [];
@@ -27,6 +28,7 @@ export function createProcess(opts: ProcessOptions = {}): Process {
   installScheduler(p);
   installKernel32Seh(p);
   installNtdll(p);
+  installUnwind(p);
   for (const fn of extraInstallers) fn(p);
   p.registerHleModules();
   return p;

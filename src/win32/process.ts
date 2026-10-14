@@ -145,6 +145,8 @@ export class Process {
   exitCode = 0;
   exited = false;
   sentinel = 0;
+  /** active callGuest invocations: `end` = rsp after the callee returns to the sentinel; `ctx` = context to continue an exception walk from */
+  hostFrames: { end: number; ctx: number }[] = [];
   tlsSlotCount = 0; // implicit TLS (image TLS directory) slot counter
   missingReported = new Set<string>();
   /** hooks installed by HLE modules */
@@ -591,7 +593,7 @@ export class Process {
   }
 
   /** Synchronous call into guest code; returns rax. Safe to use from inside HLE handlers. */
-  callGuest(fn: number, args: (number | bigint)[] = [], floatArgs: number[] = []): bigint {
+  callGuest(fn: number, args: (number | bigint)[] = [], floatArgs: number[] = [], unwindCtx = 0): bigint {
     const m = this.m;
     const saved = this.saveState();
     let sp = m.dv.getUint32(L.gprOff(RSP), true);
@@ -608,6 +610,7 @@ export class Process {
     for (let i = 0; i < Math.min(4, args.length); i++) m.setGpr(regs[i], BigInt.asUintN(64, BigInt(args[i])));
     for (let i = 0; i < floatArgs.length && i < 4; i++) m.dv.setFloat64(L.xmmOff(i), floatArgs[i], true);
     this.nested++;
+    this.hostFrames.push({ end: sp + 8, ctx: unwindCtx });
     let st: number;
     try {
       st = m.run(fn);
@@ -616,6 +619,7 @@ export class Process {
       throw e;
     } finally {
       this.nested--;
+      this.hostFrames.pop();
     }
     if (st !== L.ST_HOSTCALL_RETURN) {
       this.restoreState(saved);

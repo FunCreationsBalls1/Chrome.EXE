@@ -16,3 +16,16 @@ test("msvcrt-based PE: printf/qsort/malloc via Wine's CRT running as guest code"
   assert.equal(r.stderr.replace(/\r\n/g, "\n"), "to stderr\n");
   assert.equal(r.code, 7);
 });
+
+test("C++ exceptions (libstdc++/libgcc SEH unwinding) with destructors, rethrow, STL", { skip: !haveSysdll() }, () => {
+  const r = runFixture("cpp_exceptions.exe");
+  const out = r.stdout.replace(/\r\n/g, "\n");
+  assert.equal(out, "ctor mid\nctor thrower\ndtor thrower\ndtor mid\n2\nctor mid\nctor thrower\ndtor thrower\ndtor mid\ncaught: too big\nint 42\nrethrow inner\ncatch-all\napple=5\nfig=3\npear=4\nDerived 1\nout_of_range\n".replace("2\nctor mid", "2\nctor mid"));
+  assert.equal(r.code, 3);
+});
+
+test("Windows SEH: __try/__except/__finally, hardware divide error, RaiseException", { skip: !haveSysdll() }, () => {
+  const r = runFixture("seh_try.exe");
+  assert.equal(r.stdout.replace(/\r\n/g, "\n"), "10/2=5\nfilter code=c0000094\ndivide handler\n10/0=-1\nin try\nin finally\nouter caught e0000001\ncustom code handled\nfilters=1\n");
+  assert.equal(r.code, 0);
+});

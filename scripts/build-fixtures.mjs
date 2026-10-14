@@ -13,6 +13,8 @@ const only = process.argv[2];
 const specs = {
   hello_nocrt: { flags: ["-O2", "-nostdlib", "-ffreestanding", "-mconsole", "-Wl,-e,mainCRTStartup"], libs: ["-lkernel32"] },
   hello_crt: { flags: ["-O2"] },
+  cpp_exceptions: { flags: ["-O2", "-static"] },
+  seh_try: { clang: true },
 };
 for (const f of readdirSync(src)) {
   const m = /^(.*)\.(c|cpp)$/.exec(f);
@@ -20,6 +22,16 @@ for (const f of readdirSync(src)) {
   const name = m[1];
   if (only && only !== name) continue;
   const spec = specs[name] ?? { flags: ["-O2"] };
+  if (spec.clang) {
+    // clang for __try/__except; objects are linked with the mingw CRT
+    const obj = join(out, name + ".o");
+    const inc = "/usr/x86_64-w64-mingw32/include";
+    const cargs = ["--target=x86_64-w64-mingw32", "-O1", "-fms-extensions", "-fasync-exceptions", "-isystem", inc, "-c", join(src, f), "-o", obj];
+    console.log("clang", cargs.join(" "));
+    execFileSync("clang", cargs, { stdio: "inherit" });
+    execFileSync("x86_64-w64-mingw32-gcc", [obj, "-o", join(out, name + ".exe")], { stdio: "inherit" });
+    continue;
+  }
   const cc = m[2] === "cpp" ? "x86_64-w64-mingw32-g++" : "x86_64-w64-mingw32-gcc";
   const isDll = name.endsWith("_dll");
   const args = [...(isDll ? ["-shared"] : []), ...spec.flags, join(src, f), "-o", join(out, name + (isDll ? ".dll" : ".exe")), ...(spec.libs ?? [])];
