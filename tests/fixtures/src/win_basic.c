@@ -4,6 +4,7 @@
 static int timers = 0, paints = 0, keys = 0, clicks = 0, sizes = 0, activated = 0, chars = 0;
 static char log_[256];
 static int lastw = 0, lasth = 0;
+static int interactive = 0;
 
 static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
   switch (m) {
@@ -56,10 +57,10 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
       if (timers == 3) {
         InvalidateRect(h, NULL, FALSE);
       }
-      if (timers == 6) { KillTimer(h, 7); PostMessage(h, WM_USER + 1, 0, 0); }
+      if (timers == 6 && !interactive) { KillTimer(h, 7); PostMessage(h, WM_USER + 1, 0, 0); }
       return 0;
     case WM_KEYDOWN: keys++; printf("keydown vk=%02x\n", (unsigned)w); return 0;
-    case WM_CHAR: chars++; printf("char %c\n", (char)w); return 0;
+    case WM_CHAR: chars++; printf("char %c\n", (char)w); if (interactive && w == 'q') PostMessage(h, WM_USER + 1, 0, 0); return 0;
     case WM_LBUTTONDOWN: clicks++; printf("click %d,%d\n", LOWORD(l), HIWORD(l)); return 0;
     case WM_USER + 1:
       printf("user msg; closing\n");
@@ -74,6 +75,9 @@ static LRESULT CALLBACK WndProc(HWND h, UINT m, WPARAM w, LPARAM l) {
 }
 
 int main(void) {
+  interactive = GetFileAttributesA("interactive.flag") != INVALID_FILE_ATTRIBUTES;
+  printf("interactive=%d\n", interactive);
+  fflush(stdout);
   WNDCLASSEXA wc = {0};
   wc.cbSize = sizeof(wc);
   wc.lpfnWndProc = WndProc;

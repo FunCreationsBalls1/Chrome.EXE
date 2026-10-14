@@ -149,6 +149,8 @@ export class Process {
   exitCode = 0;
   exited = false;
   sentinel = 0;
+  /** set by subsystems (e.g. frame presentation) to ask an event-loop driver to return to the host soon */
+  yieldRequested = false;
   /** active callGuest invocations: `end` = rsp after the callee returns to the sentinel; `ctx` = context to continue an exception walk from */
   hostFrames: { end: number; ctx: number }[] = [];
   tlsSlotCount = 0; // implicit TLS (image TLS directory) slot counter

@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Chrome.EXE</title>
+<style>
+  :root { --bg:#0e1116; --fg:#e6e9ee; --dim:#8a93a2; --acc:#4da3ff; --panel:#171b22; --line:#262c36; }
+  @media (prefers-color-scheme: light) { :root { --bg:#f4f6f9; --fg:#14181f; --dim:#5c6675; --acc:#0b6bd6; --panel:#fff; --line:#d9dee6; } }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  body { display: flex; flex-direction: column; }
+  header { display: flex; align-items: center; gap: 12px; padding: 8px 16px; border-bottom: 1px solid var(--line); background: var(--panel); }
+  header h1 { font-size: 15px; margin: 0; font-weight: 650; letter-spacing: .2px; }
+  header .sp { flex: 1; }
+  #status { color: var(--dim); }
+  #fps { color: var(--dim); font-variant-numeric: tabular-nums; min-width: 56px; text-align: right; }
+  button, select, label.btn { background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 5px 10px; font: inherit; cursor: pointer; }
+  button:hover, label.btn:hover { border-color: var(--acc); }
+  #main { flex: 1; min-height: 0; position: relative; display: flex; }
+  #stage { flex: 1; position: relative; overflow: hidden; background: #000; }
+  #screen { position: absolute; transform-origin: 0 0; background: #101418; outline: none; }
+  .win { position: absolute; background: #1b1f27; }
+  .win.framed { border: 0; box-shadow: 0 4px 24px rgba(0,0,0,.5); }
+  .win .title { position: absolute; left: 0; top: 0; right: 0; background: #2b3340; color: #dfe5ee; font-size: 12px; line-height: 23px; padding-left: 8px; white-space: nowrap; overflow: hidden; }
+  .win canvas { position: absolute; background: #000; }
+  #pool { display: none; }
+  #drop { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; text-align: center; padding: 24px; }
+  body.running #drop { display: none; }
+  #drop .card { border: 2px dashed var(--line); border-radius: 16px; padding: 44px 56px; background: color-mix(in srgb, var(--panel) 85%, transparent); max-width: 640px; }
+  body.dragging #drop .card { border-color: var(--acc); }
+  #drop h2 { margin: 0 0 6px; font-size: 22px; }
+  #drop p { margin: 4px 0; color: var(--dim); }
+  #exelist { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+  #log { width: 420px; max-width: 40%; overflow: auto; background: var(--panel); border-left: 1px solid var(--line); font: 12px/1.35 ui-monospace, "Cascadia Mono", Menlo, monospace; padding: 8px; display: none; }
+  body.running #log { display: block; }
+  #log.hidden { display: none !important; }
+  #log .err { color: #ff7b72; } #log .sys { color: var(--dim); } #log div { white-space: pre-wrap; word-break: break-all; }
+  input[type=file] { display: none; }
+  @media (max-width: 700px) { #log { display: none !important; } #drop .card { padding: 28px 20px; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Chrome.EXE</h1>
+  <span id="status">loading…</span>
+  <span class="sp"></span>
+  <span id="fps"></span>
+  <label>Screen <select id="res"><option value="auto">Auto</option><option>1280x720</option><option>1920x1080</option><option>2560x1440</option><option>1024x768</option><option>800x600</option></select></label>
+  <button id="fs" title="Fullscreen">Fullscreen</button>
+  <button id="logtoggle">Log</button>
+  <button id="stop">Stop</button>
+</header>
+<div id="main">
+  <div id="stage">
+    <div id="screen" tabindex="0"></div>
+    <div id="drop">
+      <div class="card">
+        <h2>Drop a Windows .exe here</h2>
+        <p>Drag an unmodified x86-64 Windows executable — or the whole game folder — onto this page.</p>
+        <p>It is translated to WebAssembly on the fly, entirely in your browser. Nothing is uploaded.</p>
+        <p style="margin-top:18px">
+          <label class="btn">Choose .exe<input id="file" type="file" accept=".exe"></label>
+          <label class="btn">Choose folder<input id="folder" type="file" webkitdirectory></label>
+        </p>
+        <div id="exelist"></div>
+      </div>
+    </div>
+  </div>
+  <div id="log"></div>
+</div>
+<div id="pool"></div>
+<script type="module" src="main.js"></script>
+</body>
+</html>

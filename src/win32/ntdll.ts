@@ -200,7 +200,6 @@ export function installNtdll(p: Process) {
       case 26: mem.wptr(buf, 0); if (ret) mem.w32(ret, 8); return 0; // Wow64
       case 0x1e: mem.wptr(buf, 0); if (ret) mem.w32(ret, 8); return 0; // DebugPort
       case 0x1f: mem.wptr(buf, 0); if (ret) mem.w32(ret, 8); return STATUS.SUCCESS;
-      case 0x1a: mem.wptr(buf, 0); return 0;
       case 20: mem.w32(buf, 4); return 0; // ProcessHandleCount region
       default: void len; return STATUS.NOT_IMPLEMENTED;
     }
