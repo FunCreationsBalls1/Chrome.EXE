@@ -148,6 +148,8 @@ function placeWindow(v: WinView) {
 // worker messages
 // ------------------------------------------------------------------------------------------------------------------
 const decoder = new TextDecoder("latin1");
+const lineBuf = ["", ""];
+const lineTimer = [0, 0];
 function appendLog(cls: string, text: string) {
   const log = $("log");
   const line = document.createElement("div");
@@ -187,7 +189,13 @@ function onWorker(m: FromWorker) {
     case "stdout": {
       const t = decoder.decode(m.bytes);
       if (m.stream === "out") emu.stdout += t; else emu.stderr += t;
-      for (const l of t.split(/\r?\n/)) if (l) appendLog(m.stream === "out" ? "out" : "err", l);
+      // programs often write one byte at a time: assemble lines before showing them
+      const key = m.stream === "out" ? 0 : 1;
+      const buf = (lineBuf[key] += t);
+      const parts = buf.split(/\r?\n/);
+      lineBuf[key] = parts.pop() ?? "";
+      for (const l of parts) appendLog(key === 0 ? "out" : "err", l);
+      if (lineBuf[key]) { clearTimeout(lineTimer[key]); lineTimer[key] = window.setTimeout(() => { if (lineBuf[key]) { appendLog(key === 0 ? "out" : "err", lineBuf[key]); lineBuf[key] = ""; } }, 300); }
       break;
     }
     case "log": emu.log.push(m.text); appendLog("sys", m.text); break;
